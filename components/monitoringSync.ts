@@ -80,22 +80,26 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
           .from('school_monitoring')
           .select('*');
         if (!error && data) {
-          const dbRecords = data.map((row: any) => ({
-            id: row.id,
-            customer_code: row.customer_code,
-            school_name: row.school_name,
-            program: row.program || 'OTHER',
-            sales_team: row.sales_team,
-            class_opening: row.class_opening,
-            target_deployment_date: row.target_deployment_date,
-            status: Number(row.status) || 1,
-            status_dates: typeof row.status_dates === 'string' 
+          const dbRecords = data.map((row: any) => {
+            const parsedStatusDates = typeof row.status_dates === 'string' 
               ? JSON.parse(row.status_dates) 
-              : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' }),
-            items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
-            school_monitoring_id: row.school_monitoring_id || '',
-            type_of_document: row.type_of_document || ''
-          }));
+              : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
+
+            return {
+              id: row.id,
+              customer_code: row.customer_code,
+              school_name: row.school_name,
+              program: row.program || '',
+              sales_team: row.sales_team,
+              class_opening: row.class_opening,
+              target_deployment_date: row.target_deployment_date,
+              status: Number(row.status) || 1,
+              status_dates: parsedStatusDates,
+              items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
+              school_monitoring_id: row.school_monitoring_id || '',
+              type_of_document: row.type_of_document || ''
+            };
+          });
 
           monitoringRecords = dbRecords;
           localStorage.setItem('aralinks_school_monitoring', JSON.stringify(dbRecords));
@@ -239,11 +243,12 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
         try {
           for (const rec of recordsToUpsert) {
             const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rec.id || '');
+
             const dbPayload = {
               id: isUUID ? rec.id : undefined,
               customer_code: rec.customer_code,
               school_name: rec.school_name,
-              program: rec.program,
+              program: rec.program || null,
               sales_team: rec.sales_team,
               class_opening: rec.class_opening,
               target_deployment_date: rec.target_deployment_date,

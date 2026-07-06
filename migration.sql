@@ -86,3 +86,7 @@ ALTER TABLE school_monitoring ADD COLUMN IF NOT EXISTS type_of_document TEXT;
 
 ALTER TABLE item_requests ADD COLUMN IF NOT EXISTS school_monitoring_id TEXT;
 
+-- Drop check constraint on school_monitoring.program to allow any exact program selection (e.g., TNL, NGS+ACE, etc.)
+ALTER TABLE school_monitoring DROP CONSTRAINT IF EXISTS school_monitoring_program_check;
+
+

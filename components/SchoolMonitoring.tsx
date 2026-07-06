@@ -230,49 +230,29 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       finalDates[modalStatus] = today;
     }
 
+    let target: SchoolMonitoringRecord | null = null;
     const updated = records.map(r => {
       if (r.id === activeStatusEditRecord.id) {
-        return {
+        target = {
           ...r,
           status: modalStatus,
           status_dates: finalDates,
           updated_at: new Date().toISOString()
         };
+        return target;
       }
       return r;
     });
 
-    // Sync to backend if configured
-    if (isSupabaseConfigured) {
-      try {
-        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeStatusEditRecord.id || '');
-        if (isUUID) {
-          await supabase
-            .from('school_monitoring')
-            .update({
-              status: modalStatus,
-              status_dates: finalDates,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', activeStatusEditRecord.id);
-        } else if (activeStatusEditRecord.customer_code) {
-          await supabase
-            .from('school_monitoring')
-            .update({
-              status: modalStatus,
-              status_dates: finalDates,
-              updated_at: new Date().toISOString()
-            })
-            .eq('customer_code', activeStatusEditRecord.customer_code);
-        }
-      } catch (err) {
-        console.warn('Could not sync status edit back to database:', err);
-      }
+    try {
+      await persistRecords(updated, target);
+      showSuccess('Status Saved', `Successfully updated tracking checklist for ${activeStatusEditRecord.school_name}`);
+    } catch (err: any) {
+      console.error(err);
+      showError('Failed to update status', err.message || 'Could not save the new status step to the database');
     }
 
-    await persistRecords(updated);
     setActiveStatusEditRecord(null);
-    showSuccess('Status Saved', `Successfully updated tracking checklist for ${activeStatusEditRecord.school_name}`);
   };
 
   // Form states
@@ -658,22 +638,28 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
             .select('*');
           
           if (!error && data) {
-            const dbRecords = data.map((row: any) => ({
-              id: row.id,
-              customer_code: row.customer_code,
-              school_name: row.school_name,
-              program: row.program || 'OTHER',
-              sales_team: row.sales_team,
-              class_opening: row.class_opening,
-              target_deployment_date: row.target_deployment_date,
-              status: Number(row.status) || 1,
-              status_dates: typeof row.status_dates === 'string' 
+            const dbRecords = data.map((row: any) => {
+              const status_dates = typeof row.status_dates === 'string' 
                 ? JSON.parse(row.status_dates) 
-                : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' }),
-              items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
-              school_monitoring_id: row.school_monitoring_id || '',
-              type_of_document: row.type_of_document || ''
-            }));
+                : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
+              
+              const program = row.program || '';
+
+              return {
+                id: row.id,
+                customer_code: row.customer_code,
+                school_name: row.school_name,
+                program: program,
+                sales_team: row.sales_team,
+                class_opening: row.class_opening,
+                target_deployment_date: row.target_deployment_date,
+                status: Number(row.status) || 1,
+                status_dates: status_dates,
+                items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
+                school_monitoring_id: row.school_monitoring_id || '',
+                type_of_document: row.type_of_document || ''
+              };
+            });
 
             monitoringData = dbRecords;
             localStorage.setItem('aralinks_school_monitoring', JSON.stringify(dbRecords));
@@ -829,7 +815,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                 id: (rec.id && isUUID(rec.id)) ? rec.id : undefined,
                 customer_code: rec.customer_code,
                 school_name: rec.school_name,
-                program: rec.program,
+                program: rec.program || null,
                 sales_team: rec.sales_team,
                 class_opening: rec.class_opening,
                 target_deployment_date: rec.target_deployment_date,
@@ -875,7 +861,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           const payload: any = {
             customer_code: rec.customer_code,
             school_name: rec.school_name,
-            program: rec.program,
+            program: rec.program || null,
             sales_team: rec.sales_team,
             class_opening: rec.class_opening || null,
             target_deployment_date: rec.target_deployment_date || null,
@@ -887,29 +873,47 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
             updated_at: new Date().toISOString()
           };
           
-          if (rec.id && isUUID(rec.id)) {
+          let response;
+          const isRecUUID = rec.id && isUUID(rec.id);
+          
+          if (isRecUUID) {
             payload.id = rec.id;
+            response = await supabase
+              .from('school_monitoring')
+              .upsert(payload, { onConflict: 'customer_code' })
+              .select();
+          } else {
+            // Creation mode (POST method equivalent)
+            // Explicitly call .insert to let Postgres trigger DEFAULT gen_random_uuid()
+            response = await supabase
+              .from('school_monitoring')
+              .insert(payload)
+              .select();
           }
           
-          const { data, error } = await supabase
-            .from('school_monitoring')
-            .upsert(payload, { onConflict: 'customer_code' })
-            .select();
+          const { data, error } = response;
 
-          if (!error && data && data[0]) {
+          if (error) {
+            console.error('Supabase row persist error:', error);
+            throw new Error(error.message || 'Failed to save record to database');
+          }
+
+          if (data && data[0]) {
             const dbRow = data[0];
+            const parsedStatusDates = typeof dbRow.status_dates === 'string' 
+              ? JSON.parse(dbRow.status_dates) 
+              : (dbRow.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
+
             const syncedRec = {
               id: dbRow.id,
               customer_code: dbRow.customer_code,
               school_name: dbRow.school_name,
-              program: dbRow.program || 'OTHER',
+              program: dbRow.program || '',
               sales_team: dbRow.sales_team,
               class_opening: dbRow.class_opening,
               target_deployment_date: dbRow.target_deployment_date,
               status: Number(dbRow.status) || 1,
-              status_dates: typeof dbRow.status_dates === 'string' 
-                ? JSON.parse(dbRow.status_dates) 
-                : (dbRow.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' }),
+              status_dates: parsedStatusDates,
               items: typeof dbRow.items === 'string' ? JSON.parse(dbRow.items) : (dbRow.items || []),
               school_monitoring_id: dbRow.school_monitoring_id || '',
               type_of_document: dbRow.type_of_document || ''
@@ -919,14 +923,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
             updatedLocalRecords = updatedLocalRecords.map(r => 
               r.customer_code === syncedRec.customer_code ? syncedRec : r
             );
-          } else {
-            if (error) {
-              console.warn('Supabase row upsert error:', error.message);
-            }
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('Supabase DB Sync failed. Data is fully persisted locally first:', err);
+        throw err;
       }
     }
 
@@ -1138,8 +1139,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       return r;
     });
 
-    await persistRecords(updated, changedRec);
-    showSuccess('Status Updated', `Successfully changed status step to ${directStatus}`);
+    try {
+      await persistRecords(updated, changedRec);
+      showSuccess('Status Updated', `Successfully changed status step to ${directStatus}`);
+    } catch (err: any) {
+      console.error(err);
+      showError('Failed to update status', err.message || 'Could not save the new status step to the database');
+    }
   };
 
   // Submit Creation/Edit
@@ -1216,9 +1222,14 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
 
       await persistRecords(updatedRecs, targetRecord);
       setIsFormOpen(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showError('Failed to save', 'Could not sync monitoring metadata changes');
+      const msg = err.message || '';
+      if (msg.includes('duplicate key') || msg.includes('unique constraint')) {
+        showError('Duplicate Code', 'A record with this Customer Code already exists');
+      } else {
+        showError('Failed to save', msg || 'Could not sync monitoring metadata changes');
+      }
     } finally {
       setSaving(false);
     }
