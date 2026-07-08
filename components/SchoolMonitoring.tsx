@@ -398,11 +398,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       return;
     }
 
-    // Merge into formItems
+    // Merge into formItems (only merge with non-bundle items)
     setFormItems(prev => {
       const updated = [...prev];
       itemsToAdd.forEach(toAdd => {
-        const idx = updated.findIndex(item => item.item_code === toAdd.item_code);
+        const idx = updated.findIndex(item => item.item_code === toAdd.item_code && !item.bundle_name);
         if (idx > -1) {
           updated[idx].quantity += toAdd.quantity;
         } else {
@@ -956,8 +956,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
     const eqItem = equipment.find(e => e.item_code === selectedHardwareToAdd);
     const itemName = eqItem ? eqItem.item_name : selectedHardwareToAdd;
 
-    // Check if duplicate
-    const existingIdx = formItems.findIndex(item => item.item_code === selectedHardwareToAdd);
+    // Check if duplicate (only merge if it is not part of a bundle)
+    const existingIdx = formItems.findIndex(item => item.item_code === selectedHardwareToAdd && !item.bundle_name);
 
     if (existingIdx > -1) {
       const updated = [...formItems];
@@ -1006,7 +1006,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
     bToApply.items.forEach(bItem => {
       const eqItem = equipment.find(e => e.item_code === bItem.item_code);
       const itemName = bItem.item_name || (eqItem ? eqItem.item_name : bItem.item_code);
-      const existingIdx = updated.findIndex(item => item.item_code === bItem.item_code);
+      // Check for item with same item_code AND same bundle_name to keep bundles separate
+      const existingIdx = updated.findIndex(item => item.item_code === bItem.item_code && item.bundle_name === bundleName);
       
       let requestedToAdd = bItem.quantity * multiplier;
       
@@ -1021,7 +1022,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
         updated.push({
           item_code: bItem.item_code,
           item_name: itemName,
-          quantity: requestedToAdd
+          quantity: requestedToAdd,
+          bundle_name: bundleName
         });
       }
     });
@@ -1031,8 +1033,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
   };
 
   // Remove Item from creation list
-  const removeHardwareItem = (code: string) => {
-    setFormItems(formItems.filter(item => item.item_code !== code));
+  const removeHardwareItem = (index: number) => {
+    setFormItems(formItems.filter((_, idx) => idx !== index));
   };
 
   const generateSchoolMonitoringId = (existingRecords: SchoolMonitoringRecord[]) => {
@@ -1780,22 +1782,86 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                                     </h4>
                                     
                                     <div className="divide-y divide-slate-100 dark:divide-slate-850 max-h-56 overflow-y-auto pr-1">
-                                      {record.items.map((item, idX) => (
-                                        <div key={`${item.item_code}-${idX}`} className="py-2 flex items-center justify-between text-xs">
-                                          <div>
-                                            <p className="font-extrabold text-slate-700 dark:text-slate-200">{item.item_name}</p>
-                                            <span className="text-[10px] text-slate-400 font-mono">Code: {item.item_code}</span>
+                                      {(() => {
+                                        const groups: { [bundleName: string]: DesignatedHardwareItem[] } = {};
+                                        const individual: DesignatedHardwareItem[] = [];
+
+                                        (record.items || []).forEach(item => {
+                                          if (item.bundle_name) {
+                                            if (!groups[item.bundle_name]) {
+                                              groups[item.bundle_name] = [];
+                                            }
+                                            groups[item.bundle_name].push(item);
+                                          } else {
+                                            individual.push(item);
+                                          }
+                                        });
+
+                                        const hasGroups = Object.keys(groups).length > 0;
+
+                                        return (
+                                          <div className="flex flex-col gap-2">
+                                            {/* Render Bundles */}
+                                            {Object.entries(groups).map(([bundleName, groupItems]) => (
+                                              <div key={bundleName} className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden bg-slate-50/20 dark:bg-black/10">
+                                                <div className="px-3 py-1.5 bg-slate-100/50 dark:bg-slate-900 flex items-center gap-2 border-b border-slate-100 dark:border-slate-800">
+                                                  <span className="px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider bg-orange-500/10 text-brand-orange rounded">
+                                                    Bundle
+                                                  </span>
+                                                  <span className="text-[10px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wide truncate">
+                                                    {bundleName}
+                                                  </span>
+                                                </div>
+                                                <div className="divide-y divide-slate-100 dark:divide-slate-800/40 px-3 py-1 bg-white/40 dark:bg-transparent">
+                                                  {groupItems.map((item, idX) => (
+                                                    <div key={`${item.item_code}-${idX}`} className="py-2 flex items-center justify-between text-xs">
+                                                      <div>
+                                                        <p className="font-extrabold text-slate-700 dark:text-slate-200">{item.item_name}</p>
+                                                        <span className="text-[10px] text-slate-400 font-mono">Code: {item.item_code}</span>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 font-mono font-bold text-slate-800 dark:text-slate-200">
+                                                          qty: {item.quantity}
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            ))}
+
+                                            {/* Render Individual Items */}
+                                            {individual.length > 0 && (
+                                              <div className="flex flex-col">
+                                                {hasGroups && (
+                                                  <div className="px-3 py-1.5 bg-slate-100/50 dark:bg-slate-900 text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wide rounded-t-xl border-t border-l border-r border-slate-100 dark:border-slate-800">
+                                                    Individual Items
+                                                  </div>
+                                                )}
+                                                <div className={`divide-y divide-slate-100 dark:divide-slate-800/40 ${hasGroups ? 'border-b border-l border-r border-slate-100 dark:border-slate-800 rounded-b-xl px-3 bg-white/40 dark:bg-transparent' : ''}`}>
+                                                  {individual.map((item, idX) => (
+                                                    <div key={`${item.item_code}-${idX}`} className="py-2 flex items-center justify-between text-xs">
+                                                      <div>
+                                                        <p className="font-extrabold text-slate-700 dark:text-slate-200">{item.item_name}</p>
+                                                        <span className="text-[10px] text-slate-400 font-mono">Code: {item.item_code}</span>
+                                                      </div>
+                                                      <div className="text-right">
+                                                        <span className="px-2 py-0.5 rounded-md bg-slate-150/40 dark:bg-slate-800 font-mono font-bold text-slate-800 dark:text-slate-200">
+                                                          qty: {item.quantity}
+                                                        </span>
+                                                      </div>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            )}
+
+                                            {(record.items || []).length === 0 && (
+                                              <p className="text-xs p-3 text-slate-405 italic text-center">No hardware designated to school.</p>
+                                            )}
                                           </div>
-                                          <div className="text-right">
-                                            <span className="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-850 font-mono font-bold text-slate-800 dark:text-slate-200">
-                                              qty: {item.quantity}
-                                            </span>
-                                          </div>
-                                        </div>
-                                      ))}
-                                      {record.items.length === 0 && (
-                                        <p className="text-xs p-3 text-slate-405 italic text-center">No hardware designated to school.</p>
-                                      )}
+                                        );
+                                      })()}
                                     </div>
                                   </div>
 
@@ -2276,32 +2342,123 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                     </div>
 
                     {/* Selected Designated Items representation */}
-                    <div className="border border-slate-150 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800 max-h-48 overflow-y-auto">
-                      {formItems.map((fItem, index) => (
-                        <div key={`${fItem.item_code}-${index}`} className="px-3.5 py-2.5 flex items-center justify-between text-xs">
-                          <div>
-                            <p className="font-extrabold text-slate-800 dark:text-slate-100">{fItem.item_name}</p>
-                            <span className="text-[10px] text-slate-400 font-mono">Code: {fItem.item_code}</span>
+                    <div className="border border-slate-150 dark:border-slate-800 rounded-xl bg-white dark:bg-slate-900 divide-y divide-slate-100 dark:divide-slate-800 max-h-64 overflow-y-auto">
+                      {(() => {
+                        const groups: { [bundleName: string]: any[] } = {};
+                        const individual: any[] = [];
+
+                        formItems.forEach((item, index) => {
+                          const itemWithIndex = { ...item, originalIndex: index };
+                          if (item.bundle_name) {
+                            if (!groups[item.bundle_name]) {
+                              groups[item.bundle_name] = [];
+                            }
+                            groups[item.bundle_name].push(itemWithIndex);
+                          } else {
+                            individual.push(itemWithIndex);
+                          }
+                        });
+
+                        const totalCount = formItems.length;
+
+                        if (totalCount === 0) {
+                          return (
+                            <div className="p-4 text-center text-xs italic text-slate-410 font-medium">
+                              No designated equipment items specified. Add items using the selection above.
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="flex flex-col divide-y divide-slate-100 dark:divide-slate-800/40">
+                            {/* Render Bundle Groups first */}
+                            {Object.entries(groups).map(([bundleName, items]) => (
+                              <div key={bundleName} className="flex flex-col">
+                                {/* Bundle Header */}
+                                <div className="px-3.5 py-2 bg-slate-50 dark:bg-slate-950 flex items-center justify-between border-b border-slate-100 dark:border-slate-800/40">
+                                  <div className="flex items-center gap-2">
+                                    <span className="px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider bg-orange-500/10 text-brand-orange">
+                                      Bundle
+                                    </span>
+                                    <span className="text-[10px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wide">
+                                      {bundleName}
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setFormItems(prev => prev.filter(item => item.bundle_name !== bundleName));
+                                      showSuccess('Bundle Removed', `Removed entire bundle "${bundleName}" from list.`);
+                                    }}
+                                    className="text-[9px] font-bold text-red-500 hover:text-red-600 flex items-center gap-1 uppercase tracking-wider px-2 py-0.5 hover:bg-red-500/5 rounded transition-all"
+                                  >
+                                    <Trash2 size={10} /> Remove Bundle
+                                  </button>
+                                </div>
+                                {/* Bundle Items */}
+                                <div className="divide-y divide-slate-100 dark:divide-slate-850 pl-3">
+                                  {items.map((fItem) => (
+                                    <div key={`${fItem.item_code}-${fItem.originalIndex}`} className="px-3.5 py-2.5 flex items-center justify-between text-xs">
+                                      <div>
+                                        <p className="font-extrabold text-slate-800 dark:text-slate-100">{fItem.item_name}</p>
+                                        <span className="text-[10px] text-slate-400 font-mono">Code: {fItem.item_code}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        <span className="px-2 py-0.5 rounded-lg bg-orange-500/10 text-brand-orange font-bold font-mono">
+                                          qty: {fItem.quantity}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeHardwareItem(fItem.originalIndex)}
+                                          className="text-slate-400 hover:text-red-500 p-1"
+                                          title="Remove item"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+
+                            {/* Render Individual Items */}
+                            {individual.length > 0 && (
+                              <div className="flex flex-col">
+                                {Object.keys(groups).length > 0 && (
+                                  <div className="px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border-b border-slate-100 dark:border-slate-800/40">
+                                    <span className="text-[10px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                                      Individual Items
+                                    </span>
+                                  </div>
+                                )}
+                                <div className="divide-y divide-slate-100 dark:divide-slate-850">
+                                  {individual.map((fItem) => (
+                                    <div key={`${fItem.item_code}-${fItem.originalIndex}`} className="px-3.5 py-2.5 flex items-center justify-between text-xs">
+                                      <div>
+                                        <p className="font-extrabold text-slate-800 dark:text-slate-100">{fItem.item_name}</p>
+                                        <span className="text-[10px] text-slate-400 font-mono">Code: {fItem.item_code}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        <span className="px-2 py-0.5 rounded-lg bg-orange-500/10 text-brand-orange font-bold font-mono">
+                                          qty: {fItem.quantity}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => removeHardwareItem(fItem.originalIndex)}
+                                          className="text-slate-400 hover:text-red-500 p-1"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="px-2 py-0.5 rounded-lg bg-orange-500/10 text-brand-orange font-bold font-mono">
-                              qty: {fItem.quantity}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeHardwareItem(fItem.item_code)}
-                              className="text-slate-400 hover:text-red-500 p-1"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {formItems.length === 0 && (
-                        <div className="p-4 text-center text-xs italic text-slate-410 font-medium">
-                          No designated equipment items specified. Add items using the selection above.
-                        </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 );

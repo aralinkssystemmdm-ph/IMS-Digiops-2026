@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { X, ChevronDown, CheckCircle2, FileText, Check, Plus, Trash2, Paperclip, Upload, AlertCircle, Sparkles, Box, Loader2, Calendar, MapPin, Notebook, Zap, ShieldCheck, Tag, Search, Layers } from 'lucide-react';
 import { toTitleCase, getBundleColor } from '../lib/utils';
 import { RequestData } from './ItemsRequest';
@@ -71,6 +71,10 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   const [itemSearchText, setItemSearchText] = useState<{[key: string]: string}>({});
 
   const [availableBundles, setAvailableBundles] = useState<string[]>([]);
+  const [allProgramBundles, setAllProgramBundles] = useState<{[program: string]: string[]}>({});
+  const [requestedBundlesForSchool, setRequestedBundlesForSchool] = useState<string[]>([]);
+  const [pastRequestedItems, setPastRequestedItems] = useState<{ bundle_name: string; item_code: string; qty: number }[]>([]);
+  const [programBundleItems, setProgramBundleItems] = useState<{ bundle: string; item_code: string; quantity: number }[]>([]);
   const [relevantItemCodes, setRelevantItemCodes] = useState<Set<string>>(new Set());
   const [isLoadingBundles, setIsLoadingBundles] = useState(false);
   const [selectedBundleDropdown, setSelectedBundleDropdown] = useState('');
@@ -233,9 +237,126 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   }, []);
 
   useEffect(() => {
+    const fetchAllProgramBundles = async () => {
+      if (!isSupabaseConfigured) return;
+      try {
+        const { data, error } = await supabase
+          .from('bundle_items')
+          .select('program, bundle')
+          .is('archived_at', null);
+        if (data) {
+          const mapping: {[program: string]: string[]} = {};
+          (data as any[]).forEach(item => {
+            if (item.program && item.bundle) {
+              const prog = item.program.trim();
+              if (!mapping[prog]) {
+                mapping[prog] = [];
+              }
+              if (!mapping[prog].includes(item.bundle)) {
+                mapping[prog].push(item.bundle);
+              }
+            }
+          });
+          setAllProgramBundles(mapping);
+        }
+      } catch (err) {
+        console.error('Error fetching all bundles mapping:', err);
+      }
+    };
+    fetchAllProgramBundles();
+  }, []);
+
+  useEffect(() => {
+    const fetchRequestedBundles = async () => {
+      if (selectedSchools.length === 0 || !isSupabaseConfigured) {
+        setRequestedBundlesForSchool([]);
+        setPastRequestedItems([]);
+        return;
+      }
+
+      try {
+        const { data: requests, error: reqError } = await supabase
+          .from('item_requests')
+          .select('control_no, school_name')
+          .not('status', 'in', '("Deleted","Rejected")')
+          .is('archived_at', null);
+
+        if (reqError) throw reqError;
+
+        if (requests && requests.length > 0) {
+          const matchedControlNos = requests
+            .filter((req: any) => {
+              if (initialData && (req.control_no === initialData.id || req.control_no === initialData.control_no)) {
+                return false;
+              }
+              const reqSchools = req.school_name.split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+              return selectedSchools.some(s => reqSchools.includes(s.trim().toLowerCase()));
+            })
+            .map((req: any) => req.control_no);
+
+          if (matchedControlNos.length > 0) {
+            const { data: items, error: itemsError } = await supabase
+              .from('request_items')
+              .select('bundle_name, item_code, qty')
+              .in('request_control_no', matchedControlNos)
+              .is('archived_at', null);
+
+            if (itemsError) throw itemsError;
+
+            if (items) {
+              const bundles = Array.from(new Set(items.map((it: any) => it.bundle_name).filter(Boolean))) as string[];
+              setRequestedBundlesForSchool(bundles);
+              setPastRequestedItems(items.map((it: any) => ({
+                bundle_name: it.bundle_name || '',
+                item_code: it.item_code || '',
+                qty: Number(it.qty) || 0
+              })));
+              return;
+            }
+          }
+        }
+        setRequestedBundlesForSchool([]);
+        setPastRequestedItems([]);
+      } catch (err) {
+        console.error('Error fetching requested bundles for schools:', err);
+        setRequestedBundlesForSchool([]);
+        setPastRequestedItems([]);
+      }
+    };
+
+    fetchRequestedBundles();
+  }, [selectedSchools, initialData]);
+
+  const schoolMonitoringBundles = useMemo(() => {
+    const bundlesMap = new Map<string, any[]>();
+    selectedSchools.forEach(schoolName => {
+      const rec = monitoringRecords.find(r => r.school_name === schoolName);
+      if (rec && rec.items && Array.isArray(rec.items)) {
+        rec.items.forEach((item: any) => {
+          if (item.bundle_name) {
+            const bName = item.bundle_name.trim();
+            if (!bundlesMap.has(bName)) {
+              bundlesMap.set(bName, []);
+            }
+            const existing = bundlesMap.get(bName)!;
+            const duplicate = existing.find(x => x.item_code === item.item_code);
+            if (!duplicate) {
+              existing.push({ ...item });
+            } else {
+              duplicate.quantity = (duplicate.quantity || 1) + (item.quantity || 1);
+            }
+          }
+        });
+      }
+    });
+    return Array.from(bundlesMap.entries()).map(([name, items]) => ({ name, items }));
+  }, [selectedSchools, monitoringRecords]);
+
+  useEffect(() => {
     const fetchBundlesForProgram = async () => {
       if (!program || !isSupabaseConfigured) {
         setAvailableBundles([]);
+        setProgramBundleItems([]);
         return;
       }
 
@@ -243,11 +364,16 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
       try {
         const { data, error } = await supabase
           .from('bundle_items')
-          .select('bundle, item_code')
+          .select('bundle, item_code, quantity')
           .eq('program', program)
           .is('archived_at', null);
         
         if (data) {
+          setProgramBundleItems(data.map((item: any) => ({
+            bundle: item.bundle || '',
+            item_code: item.item_code || '',
+            quantity: Number(item.quantity) || 1
+          })));
           const uniqueBundles = Array.from(new Set((data as any[]).map(item => String(item.bundle || ''))));
           setAvailableBundles(uniqueBundles.sort());
           
@@ -427,7 +553,16 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         }
         
         // 2. Auto-populate Item List based on monitoring record hardware list
-        if (matchingRec.items && Array.isArray(matchingRec.items) && matchingRec.items.length > 0) {
+        // Skip automation if hardware is a bundle for this school's program
+        const matchedProg = (matchingRec.program || '').trim();
+        const hasBundles = matchedProg && (
+          (allProgramBundles[matchedProg] && allProgramBundles[matchedProg].length > 0) ||
+          matchedProg.toUpperCase().includes('ACE')
+        );
+
+        if (hasBundles) {
+          console.log('Skipping automated item list population as this program has bundles.');
+        } else if (matchingRec.items && Array.isArray(matchingRec.items) && matchingRec.items.length > 0) {
           const nextItems = [...requestedItems];
           matchingRec.items.forEach((item: any) => {
             // Check if already in the requestedItems list
@@ -520,6 +655,39 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
       console.error('Error applying bundle:', err);
       showError('Error', 'Failed to load bundle items.');
     }
+  };
+
+  const handleApplyMonitoringBundleDirect = (bundleName: string, items: any[]) => {
+    if (!bundleName || !items || items.length === 0) return;
+
+    const nextItems = [...requestedItems];
+
+    items.forEach(monItem => {
+      // Find matching equipment UOM and is_serialized
+      const equip = equipmentList.find(e => e.item_code === monItem.item_code);
+      const uom = equip && equip.uom ? equip.uom : 'UNIT';
+      
+      const qtyValue = monItem.quantity || 1;
+
+      // Check if this item is already in nextItems
+      const existingIdx = nextItems.findIndex(ri => ri.item_code === monItem.item_code && ri.bundle_name === bundleName);
+      if (existingIdx > -1) {
+        nextItems[existingIdx].qty = qtyValue.toString();
+      } else {
+        nextItems.push({
+          id: Math.random().toString(36).substr(2, 9),
+          qty: qtyValue.toString(),
+          uom: uom,
+          item: monItem.item_name || (equip ? equip.description : monItem.item_code),
+          item_code: monItem.item_code,
+          is_serialized: equip ? equip.is_serialized : false,
+          bundle_name: bundleName
+        });
+      }
+    });
+
+    setRequestedItems(nextItems);
+    showSuccess('Bundle Populated', `Successfully populated items from school monitoring bundle "${bundleName}".`);
   };
 
   const handleRemoveItem = (id: string) => {
@@ -929,6 +1097,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
           </div>
         </div>
       )}
+
+
 
       <div className="relative bg-white dark:bg-slate-900 w-full max-w-[850px] h-full sm:h-auto sm:max-h-[90vh] sm:rounded-2xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col">
         
@@ -1414,92 +1584,156 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                 </div>
               </div>
 
-              {program && availableBundles.length > 0 && (
-                <div className="mt-4 animate-in fade-in slide-in-from-top-2 duration-300">
+              {schoolMonitoringBundles.length > 0 && (
+                <div className="mt-4 p-4 border rounded-xl bg-slate-50/50 dark:bg-black/10 animate-in fade-in duration-300" style={{ borderColor: 'var(--brand-accent)' }}>
                   <div className="flex items-center gap-2 mb-3">
-                    <Sparkles size={14} className="fill-current opacity-20" style={{ color: 'var(--brand-accent)' }} />
-                    <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Apply Bundle Configuration</span>
+                    <Layers size={14} style={{ color: 'var(--brand-accent)' }} />
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Bundles from School Monitoring ({schoolMonitoringBundles.length})</span>
                   </div>
-                  <div className="relative" ref={bundleDropdownRef}>
-                    <div className="absolute inset-0 border-2 border-dashed rounded-full pointer-events-none opacity-30" style={{ borderColor: 'var(--brand-accent)' }} />
-                    <button
-                      type="button"
-                      onClick={() => setIsBundleDropdownOpen(!isBundleDropdownOpen)}
-                      className="w-full pl-10 pr-10 py-3 bg-transparent rounded-full text-[11px] font-bold uppercase tracking-wider focus:outline-none cursor-pointer transition-all text-left truncate flex items-center justify-between"
-                      style={{ color: 'var(--brand-accent)' }}
-                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = `color-mix(in srgb, var(--brand-accent), transparent 95%)`}
-                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                    >
-                      <span className="truncate">
-                        {isLoadingBundles ? 'Syncing Bundles...' : selectedBundleDropdown || 'Select Bundle to Add'}
-                      </span>
-                      <ChevronDown size={14} className="transition-transform duration-200" style={{ transform: isBundleDropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} />
-                    </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {schoolMonitoringBundles.map((b) => {
+                      const isAlreadyRequested = requestedBundlesForSchool.includes(b.name);
+                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name === b.name);
+                      const isNotClickable = isAlreadyRequested || isCurrentlyAdded;
 
-                    {isBundleDropdownOpen && (
-                      <div className={`absolute z-[130] left-0 right-0 mt-2 border rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 ${
-                        isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-black'
-                      }`}>
-                        <div className="max-h-[200px] overflow-y-auto py-2">
-                          <div
+                      return (
+                        <div 
+                          key={b.name}
+                          className={`p-3 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
+                            isNotClickable 
+                              ? 'bg-slate-100 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-60' 
+                              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-[#FE4E02]'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex justify-between items-start gap-2">
+                              <p className={`text-xs font-bold leading-tight ${isNotClickable ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-700 dark:text-white'}`}>
+                                {b.name}
+                              </p>
+                            </div>
+                            
+                            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                              Contains {b.items.length} items from school monitoring.
+                            </p>
+                            
+                            <div className="mt-2 space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                              {b.items.map((item: any) => (
+                                <div key={item.item_code} className="flex justify-between text-[9px] text-slate-400 dark:text-slate-500 gap-2">
+                                  <span className="truncate">• {item.item_name || item.item_code}</span>
+                                  <span className="font-bold shrink-0">Qty: {item.quantity || 1}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {isNotClickable && (
+                              <span className="inline-block mt-3 px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-500 uppercase tracking-wider">
+                                {isAlreadyRequested ? 'Already Requested' : 'Added to Request'}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <button
+                            type="button"
+                            disabled={isNotClickable}
                             onClick={() => {
-                              setSelectedBundleDropdown('');
-                              setIsBundleDropdownOpen(false);
+                              handleApplyMonitoringBundleDirect(b.name, b.items);
                             }}
-                            className="px-4 py-2.5 text-xs font-bold cursor-pointer transition-colors"
-                            style={{
-                              backgroundColor: selectedBundleDropdown === ''
-                                ? `color-mix(in srgb, var(--brand-accent), transparent ${isDarkMode ? '80%' : '90%'})`
-                                : undefined,
-                              color: selectedBundleDropdown === '' ? (isDarkMode ? '#ffffff' : 'var(--brand-accent)') : undefined
-                            }}
+                            className={`w-full py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                              isNotClickable
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'
+                                : 'bg-transparent border active:scale-95'
+                            }`}
+                            style={!isNotClickable ? {
+                              color: 'var(--brand-accent)',
+                              borderColor: 'var(--brand-accent)'
+                            } : {}}
                             onMouseEnter={(e) => {
-                              if (selectedBundleDropdown !== '') {
-                                e.currentTarget.style.backgroundColor = `color-mix(in srgb, var(--brand-accent), transparent 95%)`;
+                              if (!isNotClickable) {
+                                e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
+                                e.currentTarget.style.color = '#ffffff';
                               }
                             }}
                             onMouseLeave={(e) => {
-                              if (selectedBundleDropdown !== '') {
+                              if (!isNotClickable) {
                                 e.currentTarget.style.backgroundColor = 'transparent';
+                                e.currentTarget.style.color = 'var(--brand-accent)';
                               }
                             }}
                           >
-                            SELECT BUNDLE TO ADD
-                          </div>
-                          {availableBundles.map((bundle, idx) => {
-                            return (
-                              <div
-                                key={`${bundle}-${idx}`}
-                                onClick={() => {
-                                  setSelectedBundleDropdown(bundle);
-                                  handleApplyBundle(bundle);
-                                  setIsBundleDropdownOpen(false);
-                                }}
-                                className="px-4 py-2.5 text-xs font-bold cursor-pointer transition-colors"
-                                style={{
-                                  backgroundColor: selectedBundleDropdown === bundle
-                                    ? `color-mix(in srgb, var(--brand-accent), transparent ${isDarkMode ? '80%' : '90%'})`
-                                    : undefined,
-                                  color: selectedBundleDropdown === bundle ? (isDarkMode ? '#ffffff' : 'var(--brand-accent)') : undefined
-                                }}
-                                onMouseEnter={(e) => {
-                                  if (selectedBundleDropdown !== bundle) {
-                                    e.currentTarget.style.backgroundColor = `color-mix(in srgb, var(--brand-accent), transparent 95%)`;
-                                  }
-                                }}
-                                onMouseLeave={(e) => {
-                                  if (selectedBundleDropdown !== bundle) {
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                  }
-                                }}
-                              >
-                                {bundle}
-                              </div>
-                            );
-                          })}
+                            {isAlreadyRequested ? 'Already Requested' : isCurrentlyAdded ? 'Added to Request' : 'Populate Bundle'}
+                          </button>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {program && availableBundles.length > 0 && (
+                <div className="mt-4 p-4 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-black/10 animate-in fade-in duration-300">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Layers size={14} style={{ color: 'var(--brand-accent)' }} />
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Available Hardware Bundles ({availableBundles.length})</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {availableBundles.map((bundle) => {
+                      const isAlreadyRequested = requestedBundlesForSchool.includes(bundle);
+                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name === bundle);
+                      const isNotClickable = isAlreadyRequested || isCurrentlyAdded;
+                      return (
+                        <div 
+                          key={bundle}
+                          className={`p-3 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
+                            isNotClickable 
+                              ? 'bg-slate-100 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-60' 
+                              : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-[#FE4E02]'
+                          }`}
+                        >
+                          <div>
+                            <p className={`text-xs font-bold leading-tight ${isNotClickable ? 'text-slate-400 dark:text-slate-500 line-through' : 'text-slate-700 dark:text-white'}`}>
+                              {bundle}
+                            </p>
+                            {isNotClickable && (
+                              <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-bold bg-slate-200 dark:bg-slate-800 text-slate-500 uppercase tracking-wider">
+                                {isAlreadyRequested ? 'Already Requested' : 'Added to Request'}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <button
+                            type="button"
+                            disabled={isNotClickable}
+                            onClick={() => {
+                              setSelectedBundleDropdown(bundle);
+                              handleApplyBundle(bundle);
+                            }}
+                            className={`w-full py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                              isNotClickable
+                                ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed'
+                                : 'bg-transparent border active:scale-95'
+                            }`}
+                            style={!isNotClickable ? {
+                              color: 'var(--brand-accent)',
+                              borderColor: 'var(--brand-accent)'
+                            } : {}}
+                            onMouseEnter={(e) => {
+                              if (!isNotClickable) {
+                                e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
+                                e.currentTarget.style.color = '#ffffff';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!isNotClickable) {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                                e.currentTarget.style.color = 'var(--brand-accent)';
+                              }
+                            }}
+                          >
+                            {isAlreadyRequested ? 'Already Requested' : isCurrentlyAdded ? 'Added to Request' : 'Populate Bundle'}
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1671,30 +1905,35 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
           <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
               <h3 className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{toTitleCase("Items List")} <span style={{ color: 'var(--brand-accent)' }}>*</span></h3>
-              <button 
-                onClick={handleAddItem} 
-                disabled={!program}
-                className="w-full sm:w-auto px-4 py-2 border rounded-lg font-medium text-xs transition-all active:scale-95 flex items-center justify-center gap-2 uppercase tracking-wider disabled:border-slate-200 dark:disabled:border-slate-800 disabled:text-slate-300 dark:disabled:text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-50 dark:disabled:bg-slate-900/50"
-                style={{
-                  borderColor: program ? 'var(--brand-accent)' : undefined,
-                  color: program ? 'var(--brand-accent)' : undefined
-                }}
-                onMouseEnter={(e) => {
-                  if (program) {
-                    e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
-                    e.currentTarget.style.color = '#ffffff';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (program) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.color = 'var(--brand-accent)';
-                  }
-                }}
-              >
-                <Plus size={14} />
-                <span>Add Item Line</span>
-              </button>
+              {(() => {
+                const isAddItemDisabled = !program || requestedItems.some(ri => !!ri.bundle_name);
+                return (
+                  <button 
+                    onClick={handleAddItem} 
+                    disabled={isAddItemDisabled}
+                    className="w-full sm:w-auto px-4 py-2 border rounded-lg font-medium text-xs transition-all active:scale-95 flex items-center justify-center gap-2 uppercase tracking-wider disabled:border-slate-200 dark:disabled:border-slate-800 disabled:text-slate-300 dark:disabled:text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-50 dark:disabled:bg-slate-900/50"
+                    style={{
+                      borderColor: !isAddItemDisabled ? 'var(--brand-accent)' : undefined,
+                      color: !isAddItemDisabled ? 'var(--brand-accent)' : undefined
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isAddItemDisabled) {
+                        e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
+                        e.currentTarget.style.color = '#ffffff';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isAddItemDisabled) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.color = 'var(--brand-accent)';
+                      }
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>Add Item Line</span>
+                  </button>
+                );
+              })()}
             </div>
 
             <div className="space-y-4 pb-40">
@@ -1915,7 +2154,9 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                                 });
 
                                 const filteredBundles = availableBundles.filter(b => 
-                                  b.toLowerCase().includes(q)
+                                  b.toLowerCase().includes(q) &&
+                                  !requestedBundlesForSchool.includes(b) &&
+                                  !requestedItems.some(ri => ri.bundle_name === b)
                                 );
 
                                 return (
