@@ -304,7 +304,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
             if (itemsError) throw itemsError;
 
             if (items) {
-              const bundles = Array.from(new Set(items.map((it: any) => it.bundle_name).filter(Boolean))) as string[];
+              const bundles = Array.from(new Set(items.map((it: any) => it.bundle_name ? it.bundle_name.trim() : '').filter(Boolean))) as string[];
               setRequestedBundlesForSchool(bundles);
               setPastRequestedItems(items.map((it: any) => ({
                 bundle_name: it.bundle_name || '',
@@ -1592,8 +1592,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {schoolMonitoringBundles.map((b) => {
-                      const isAlreadyRequested = requestedBundlesForSchool.includes(b.name);
-                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name === b.name);
+                      const isAlreadyRequested = requestedBundlesForSchool.some(rb => rb.trim().toLowerCase() === b.name.trim().toLowerCase());
+                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name && ri.bundle_name.trim().toLowerCase() === b.name.trim().toLowerCase());
                       const isNotClickable = isAlreadyRequested || isCurrentlyAdded;
 
                       return (
@@ -1677,8 +1677,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {availableBundles.map((bundle) => {
-                      const isAlreadyRequested = requestedBundlesForSchool.includes(bundle);
-                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name === bundle);
+                      const isAlreadyRequested = requestedBundlesForSchool.some(rb => rb.trim().toLowerCase() === bundle.trim().toLowerCase());
+                      const isCurrentlyAdded = requestedItems.some(ri => ri.bundle_name && ri.bundle_name.trim().toLowerCase() === bundle.trim().toLowerCase());
                       const isNotClickable = isAlreadyRequested || isCurrentlyAdded;
                       return (
                         <div 
@@ -2155,8 +2155,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
 
                                 const filteredBundles = availableBundles.filter(b => 
                                   b.toLowerCase().includes(q) &&
-                                  !requestedBundlesForSchool.includes(b) &&
-                                  !requestedItems.some(ri => ri.bundle_name === b)
+                                  !requestedBundlesForSchool.some(rb => rb.trim().toLowerCase() === b.trim().toLowerCase()) &&
+                                  !requestedItems.some(ri => ri.bundle_name && ri.bundle_name.trim().toLowerCase() === b.trim().toLowerCase())
                                 );
 
                                 return (

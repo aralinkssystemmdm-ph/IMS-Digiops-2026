@@ -24,12 +24,14 @@ import {
   PenTool, 
   Sparkles, 
   X,
+  Loader2,
   FileCheck,
   ListPlus,
   Compass
 } from 'lucide-react';
 import { useNotification } from './NotificationProvider';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { getBundleColor } from '../lib/utils';
 
 // Local storage key
 const STORAGE_KEY = 'aralinks_delivery_receipts';
@@ -227,6 +229,14 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
   const [hardwareSearchQueries, setHardwareSearchQueries] = useState<{ [rowId: string]: string }>({});
   const [hardwareDropdownOpens, setHardwareDropdownOpens] = useState<{ [rowId: string]: boolean }>({});
 
+  // Serial number dropdown & dynamic search states
+  const [serialDropdownOpens, setSerialDropdownOpens] = useState<{ [rowId: string]: boolean }>({});
+  const [serialSearchQueries, setSerialSearchQueries] = useState<{ [rowId: string]: string }>({});
+  const [availableSerials, setAvailableSerials] = useState<{ [itemCode: string]: { serial_number: string; location: string; condition: string; item_code?: string }[] }>({});
+  const [loadingSerials, setLoadingSerials] = useState<{ [itemCode: string]: boolean }>({});
+  const [globalAvailableSerials, setGlobalAvailableSerials] = useState<{ serial_number: string; item_code: string; location: string; condition: string }[]>([]);
+  const [loadingGlobalSerials, setLoadingGlobalSerials] = useState(false);
+
   // Signatory Scribbling Overlay state
   const [drawingSignatoryKey, setDrawingSignatoryKey] = useState<'prepared' | 'approved' | 'delivered' | 'checkedReceived' | null>(null);
   const [isSignModalOpen, setIsSignModalOpen] = useState(false);
@@ -405,7 +415,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       try {
         const { data, error } = await supabase
           .from('equipment')
-          .select('item_code, description, is_serialized, uom, specifications, status')
+          .select('item_code, description, is_serialized, uom, status')
           .is('archived_at', null)
           .order('description', { ascending: true });
         
@@ -468,11 +478,16 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     fetchBundlesForProject();
   }, [project]);
 
-  // Click outside listener for bundle dropdown
+  // Click outside listener for bundle dropdown and serial dropdowns
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (bundleDropdownRef.current && !bundleDropdownRef.current.contains(event.target as Node)) {
         setIsBundleDropdownOpen(false);
+      }
+      
+      const isInsideSerialContainer = (event.target as HTMLElement).closest('.serial-dropdown-container');
+      if (!isInsideSerialContainer) {
+        setSerialDropdownOpens({});
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -503,7 +518,11 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     }
 
     // Auto populate all hardware items from school monitoring
-    if (school.items && school.items.length > 0) {
+    const hasBundles = school.items && school.items.some((it: any) => it.bundle_name);
+    if (hasBundles) {
+      setHardwareItems([]);
+      showInfo('Bundles Detected', `This school contains bundle packages. Click the bundle(s) below to populate hardware items.`);
+    } else if (school.items && school.items.length > 0) {
       const populatedHardware = school.items.map((it: any, index: number) => {
         const itemCode = it.item_code || '';
         const matched = MOCK_HARDWARE_CATALOG.find(c => c.code === itemCode);
@@ -534,6 +553,59 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       (s.customer_code || s.customerCode || '').toLowerCase().includes(schoolSearchQuery.toLowerCase())
     );
   }, [schoolSearchQuery, monitoringRecords]);
+
+  // Computed school monitoring record based on selected school name
+  const selectedSchoolRecord = useMemo(() => {
+    return monitoringRecords.find(r => (r.school_name || r.name || '').toLowerCase() === deliveredTo.toLowerCase());
+  }, [deliveredTo, monitoringRecords]);
+
+  // Computed bundles from selected school monitoring record
+  const schoolMonitoringBundles = useMemo(() => {
+    if (!selectedSchoolRecord || !selectedSchoolRecord.items || !Array.isArray(selectedSchoolRecord.items)) {
+      return [];
+    }
+    const bundlesMap = new Map<string, any[]>();
+    selectedSchoolRecord.items.forEach((item: any) => {
+      if (item.bundle_name) {
+        const bName = item.bundle_name.trim();
+        if (!bundlesMap.has(bName)) {
+          bundlesMap.set(bName, []);
+        }
+        const existing = bundlesMap.get(bName)!;
+        const duplicate = existing.find(x => x.item_code === item.item_code);
+        if (!duplicate) {
+          existing.push({ ...item });
+        } else {
+          duplicate.quantity = (duplicate.quantity || 1) + (item.quantity || 1);
+        }
+      }
+    });
+    return Array.from(bundlesMap.entries()).map(([name, items]) => ({ name, items }));
+  }, [selectedSchoolRecord]);
+
+  const handleApplyMonitoringBundleDirect = (bundleName: string, items: any[]) => {
+    const populatedHardware = items.map((it: any, index: number) => {
+      const itemCode = it.item_code || '';
+      const matched = MOCK_HARDWARE_CATALOG.find(c => c.code === itemCode);
+      return {
+        id: `hw-${itemCode}-${index}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        qty: it.quantity || it.qty || 1,
+        unit: it.unit || it.uom || matched?.unit || 'pcs',
+        description: it.item_name || it.description || '',
+        specifications: it.specifications || matched?.spec || '',
+        remarks: `Bundle: ${bundleName}`,
+        item_code: itemCode
+      };
+    });
+
+    setHardwareItems(prev => {
+      // Filter out previous items for this bundle, then append new ones
+      const filtered = prev.filter(item => item.remarks !== `Bundle: ${bundleName}`);
+      return [...filtered, ...populatedHardware];
+    });
+
+    showSuccess('Bundle Populated', `Successfully populated ${populatedHardware.length} items from "${bundleName}" based on school monitoring quantities.`);
+  };
 
   const resolvedInventoryItems = useMemo(() => {
     if (inventoryItems && inventoryItems.length > 0) {
@@ -665,13 +737,141 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     }
   };
 
+  // Helper to determine if an item is serialized
+  const isSerializedItem = (itemCode?: string, description?: string) => {
+    if (!itemCode && !description) return false;
+    
+    const cleanCode = itemCode ? itemCode.trim().toUpperCase() : '';
+    const cleanDesc = description ? description.trim().toLowerCase() : '';
+
+    // 1. Try finding in equipmentList by item_code
+    let equip = cleanCode 
+      ? equipmentList.find(e => (e.item_code || '').trim().toUpperCase() === cleanCode)
+      : null;
+
+    // 2. Try finding in equipmentList by description as a fallback
+    if (!equip && cleanDesc) {
+      equip = equipmentList.find(e => (e.description || '').trim().toLowerCase() === cleanDesc);
+    }
+
+    if (equip) {
+      const val = equip.is_serialized;
+      if (val === true || val === 1 || val === '1') return true;
+      if (typeof val === 'string') {
+        const upper = val.trim().toUpperCase();
+        return upper === 'YES' || upper === 'TRUE';
+      }
+    }
+
+    // 3. Try checking in resolvedInventoryItems as a fallback
+    if (resolvedInventoryItems && resolvedInventoryItems.length > 0) {
+      let inv = cleanCode
+        ? resolvedInventoryItems.find((e: any) => (e.item_code || '').trim().toUpperCase() === cleanCode)
+        : null;
+      if (!inv && cleanDesc) {
+        inv = resolvedInventoryItems.find((e: any) => (e.item_name || '').trim().toLowerCase() === cleanDesc);
+      }
+      if (inv && (inv as any).is_serialized) {
+        const val = (inv as any).is_serialized;
+        if (val === true || val === 1 || val === '1') return true;
+        if (typeof val === 'string') {
+          const upper = val.trim().toUpperCase();
+          return upper === 'YES' || upper === 'TRUE';
+        }
+      }
+    }
+
+    return false;
+  };
+
+  // Format serial numbers into ranges (e.g. GOO-25-15 to GOO-25-34) if consecutive
+  const formatSerialRanges = (serialsString: string): string => {
+    if (!serialsString) return '------';
+    const serials = serialsString.split(',').map(s => s.trim()).filter(Boolean);
+    if (serials.length === 0) return '------';
+
+    interface SerialInfo {
+      original: string;
+      prefix: string;
+      numStr: string;
+      numVal: number;
+    }
+
+    const parsed: SerialInfo[] = serials.map(s => {
+      const match = s.match(/^(.*?)(\d+)$/);
+      if (match) {
+        return {
+          original: s,
+          prefix: match[1],
+          numStr: match[2],
+          numVal: parseInt(match[2], 10)
+        };
+      } else {
+        return {
+          original: s,
+          prefix: s,
+          numStr: '',
+          numVal: -1
+        };
+      }
+    });
+
+    const ranges: string[] = [];
+    let i = 0;
+    while (i < parsed.length) {
+      const start = parsed[i];
+      let end = start;
+
+      if (start.numVal !== -1) {
+        while (
+          i + 1 < parsed.length &&
+          parsed[i + 1].prefix === start.prefix &&
+          parsed[i + 1].numVal === end.numVal + 1
+        ) {
+          end = parsed[i + 1];
+          i++;
+        }
+      }
+
+      if (start.original === end.original) {
+        ranges.push(start.original);
+      } else {
+        ranges.push(`${start.original} to ${end.original}`);
+      }
+      i++;
+    }
+
+    return ranges.join(', ');
+  };
+
   const removeHardwareRow = (id: string) => {
     setHardwareItems(hardwareItems.filter(item => item.id !== id));
   };
 
   const updateHardwareRow = (id: string, updates: Partial<DRHardwareItem>) => {
-    setHardwareItems(
-      hardwareItems.map(item => (item.id === id ? { ...item, ...updates } : item))
+    setHardwareItems(prev =>
+      prev.map(item => {
+        if (item.id === id) {
+          const merged = { ...item, ...updates };
+          const rowItemCode = merged.item_code || (() => {
+            const matched = resolvedInventoryItems.find(it => 
+              (it.item_name || '').toLowerCase() === (merged.description || '').toLowerCase()
+            );
+            return matched?.item_code;
+          })();
+          const isSerialized = isSerializedItem(rowItemCode, merged.description);
+          
+          if (isSerialized) {
+            // "this can be payload in column remarks"
+            // If specifications (selected serial numbers) are updated, copy them to remarks
+            if ('specifications' in updates && !('remarks' in updates)) {
+              merged.remarks = updates.specifications || '';
+            }
+          }
+          return merged;
+        }
+        return item;
+      })
     );
   };
 
@@ -725,6 +925,55 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     // Clear searches
     setHardwareSearchQueries(prev => ({ ...prev, [rowId]: nameStr }));
     setHardwareDropdownOpens(prev => ({ ...prev, [rowId]: false }));
+  };
+
+  // Fetch available serial numbers for a given item code from item_serials table
+  const fetchSerialsForItem = async (itemCode: string) => {
+    if (!isSupabaseConfigured || !itemCode) return;
+    if (loadingSerials[itemCode]) return;
+
+    setLoadingSerials(prev => ({ ...prev, [itemCode]: true }));
+    try {
+      const { data, error } = await supabase
+        .from('item_serials')
+        .select('serial_number, location, condition, item_code')
+        .eq('item_code', itemCode)
+        .eq('status', 'Available');
+
+      if (error) throw error;
+
+      if (data) {
+        setAvailableSerials(prev => ({ ...prev, [itemCode]: data as any[] }));
+      }
+    } catch (err) {
+      console.error('Error fetching serials for item:', itemCode, err);
+    } finally {
+      setLoadingSerials(prev => ({ ...prev, [itemCode]: false }));
+    }
+  };
+
+  // Fetch all available serial numbers from the database for global searching
+  const fetchGlobalSerials = async () => {
+    if (!isSupabaseConfigured) return;
+    if (loadingGlobalSerials) return;
+
+    setLoadingGlobalSerials(true);
+    try {
+      const { data, error } = await supabase
+        .from('item_serials')
+        .select('serial_number, item_code, location, condition')
+        .eq('status', 'Available');
+
+      if (error) throw error;
+
+      if (data) {
+        setGlobalAvailableSerials(data as any[]);
+      }
+    } catch (err) {
+      console.error('Error fetching global serials:', err);
+    } finally {
+      setLoadingGlobalSerials(false);
+    }
   };
 
   // Canvas drawing signatories controllers
@@ -848,6 +1097,33 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     if (hardwareItems.length === 0) {
       showError('Validation Failed', 'Please input at least one Hardware Item.');
       return;
+    }
+
+    // Validate that all serialized items have serial numbers (specifications) set
+    for (const item of hardwareItems) {
+      let itemCode = item.item_code;
+      if (!itemCode) {
+        const matched = resolvedInventoryItems.find(it => 
+          (it.item_name || '').toLowerCase() === (item.description || '').toLowerCase()
+        );
+        if (matched) {
+          itemCode = matched.item_code;
+        }
+      }
+
+      if (itemCode && isSerializedItem(itemCode, item.description)) {
+        const sns = item.specifications
+          ? item.specifications.split(',').map(s => s.trim()).filter(Boolean)
+          : [];
+        if (sns.length === 0) {
+          showError('Validation Failed', `Please select at least one serial number for the serialized item "${item.description || 'Unknown Item'}".`);
+          return;
+        }
+        if (sns.length !== item.qty) {
+          showError('Validation Failed', `For "${item.description || 'Unknown Item'}", you have selected ${sns.length} serials, but the quantity is ${item.qty}. Please select exactly ${item.qty} serials or adjust the quantity.`);
+          return;
+        }
+      }
     }
 
     try {
@@ -1097,6 +1373,24 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                   }]);
 
                 if (txError) throw txError;
+              }
+
+              // Update the status of the selected serial number in item_serials table to match the DR transition
+              if (itemCode && isSerializedItem(itemCode, item.description) && item.specifications) {
+                const sns = item.specifications.split(',').map(sn => sn.trim()).filter(Boolean);
+                if (sns.length > 0) {
+                  const { error: serErr } = await supabase
+                    .from('item_serials')
+                    .update({
+                      status: status === 'Delivered' ? 'Delivered' : 'In Transit',
+                      request_id: drNo
+                    })
+                    .eq('item_code', itemCode)
+                    .in('serial_number', sns);
+                  if (serErr) {
+                    console.warn('Could not update status of serial numbers in item_serials:', sns, serErr);
+                  }
+                }
               }
             }
           }
@@ -1484,14 +1778,98 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
               </div>
             </div>
 
+            {schoolMonitoringBundles.length > 0 && (
+              <div className="p-4 border rounded-xl bg-slate-50/50 dark:bg-black/10 animate-in fade-in duration-300" style={{ borderColor: 'var(--brand-accent)' }}>
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles size={14} style={{ color: 'var(--brand-accent)' }} />
+                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Bundles from School Monitoring ({schoolMonitoringBundles.length})</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {schoolMonitoringBundles.map((b) => {
+                    const isCurrentlyAdded = hardwareItems.some(ri => ri.remarks && ri.remarks.includes(`Bundle: ${b.name}`));
+                    return (
+                      <div 
+                        key={b.name}
+                        className={`p-3 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
+                          isCurrentlyAdded 
+                            ? 'bg-slate-100 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-80' 
+                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-[#FE4E02]'
+                        }`}
+                      >
+                        <div>
+                          <p className={`text-xs font-bold leading-tight ${isCurrentlyAdded ? 'text-slate-400 dark:text-slate-500' : 'text-slate-700 dark:text-white'}`}>
+                            {b.name}
+                          </p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                            Contains {b.items.length} hardware items.
+                          </p>
+                          <div className="mt-2 space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                            {b.items.map((item: any) => (
+                              <div key={item.item_code} className="flex justify-between text-[9px] text-slate-400 dark:text-slate-500 gap-2">
+                                <span className="truncate">• {item.item_name || item.item_code}</span>
+                                <span className="font-bold shrink-0">Qty: {item.quantity || item.qty || 1}</span>
+                              </div>
+                            ))}
+                          </div>
+                          {isCurrentlyAdded && (
+                            <span className="inline-block mt-3 px-1.5 py-0.5 rounded text-[8px] font-bold bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400 uppercase tracking-wider">
+                              Added to DR
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleApplyMonitoringBundleDirect(b.name, b.items);
+                          }}
+                          className={`w-full py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            isCurrentlyAdded
+                              ? 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 hover:bg-green-500/20'
+                              : 'bg-transparent border active:scale-95'
+                          }`}
+                          style={!isCurrentlyAdded ? {
+                            color: 'var(--brand-accent)',
+                            borderColor: 'var(--brand-accent)'
+                          } : {}}
+                          onMouseEnter={(e) => {
+                            if (!isCurrentlyAdded) {
+                              e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
+                              e.currentTarget.style.color = '#ffffff';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isCurrentlyAdded) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                              e.currentTarget.style.color = 'var(--brand-accent)';
+                            }
+                          }}
+                        >
+                          {isCurrentlyAdded ? 'Populate Again' : 'Populate Bundle'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3">
-              {hardwareItems.map((row, index) => (
-                <div 
-                  key={row.id} 
-                  className={`p-3 rounded-xl border flex flex-col gap-2 relative transition-all duration-200 ${
-                    isDarkMode ? 'bg-slate-950/20 border-slate-801 hover:border-slate-700' : 'bg-slate-50/50 border-slate-105 hover:border-slate-200'
-                  }`}
-                >
+              {hardwareItems.map((row, index) => {
+                const rowItemCode = row.item_code || (() => {
+                  const matched = resolvedInventoryItems.find(it => 
+                    (it.item_name || '').toLowerCase() === (row.description || '').toLowerCase()
+                  );
+                  return matched?.item_code;
+                })();
+                const isSerialized = isSerializedItem(rowItemCode, row.description);
+
+                return (
+                  <div 
+                    key={row.id} 
+                    className={`p-3 rounded-xl border flex flex-col gap-2 relative transition-all duration-200 ${
+                      isDarkMode ? 'bg-slate-950/20 border-slate-801 hover:border-slate-700' : 'bg-slate-50/50 border-slate-105 hover:border-slate-200'
+                    }`}
+                  >
                   {/* Delete Hardware row button top-right */}
                   <button
                     type="button"
@@ -1647,17 +2025,283 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-1 text-left">
                     {/* Item Specifications (Serial no) */}
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Item Specifications / Serial Numbers (Optional)</label>
-                      <input
-                        type="text"
-                        placeholder="e.g., NXKS7SP00141509F333400, Core i7 16G"
-                        value={row.specifications}
-                        onChange={(e) => updateHardwareRow(row.id, { specifications: e.target.value })}
-                        className={`px-3 py-1 rounded-lg border text-sm font-mono focus:outline-none ${
-                          isDarkMode ? 'bg-slate-955 border-slate-808 text-white' : 'bg-white border-slate-205 text-slate-800'
-                        }`}
-                      />
+                    <div className="flex flex-col gap-1">
+                      {(() => {
+                        if (rowItemCode && !isSerialized) {
+                          // Non-serialized item, normal specifications/serial input
+                          return (
+                            <>
+                              <label className="text-xs font-bold text-slate-500 uppercase">Item Specifications / Serial Numbers (Optional)</label>
+                              <input
+                                type="text"
+                                placeholder="e.g., Core i7 16G, NXKS7SP001..."
+                                value={row.specifications}
+                                onChange={(e) => updateHardwareRow(row.id, { specifications: e.target.value })}
+                                className={`px-3 py-1 rounded-lg border text-sm font-mono focus:outline-none ${
+                                  isDarkMode ? 'bg-slate-955 border-slate-808 text-white' : 'bg-white border-slate-205 text-slate-800'
+                                }`}
+                              />
+                            </>
+                          );
+                        }
+
+                        // Serialized item or unspecified stock selection
+                        const selectedSerials = row.specifications
+                          ? row.specifications.split(',').map(s => s.trim()).filter(Boolean)
+                          : [];
+
+                        const serialSearchVal = serialSearchQueries[row.id] || '';
+                        
+                        let matchedSerials: any[] = [];
+                        let allSerials: any[] = [];
+                        let isFetching = false;
+
+                        if (rowItemCode) {
+                          allSerials = availableSerials[rowItemCode || ''] || [];
+                          const locationFilteredSerials = row.deduct_location 
+                            ? allSerials.filter(s => s.location === row.deduct_location)
+                            : allSerials;
+                          
+                          matchedSerials = locationFilteredSerials.filter(s => 
+                            s.serial_number.toLowerCase().includes(serialSearchVal.toLowerCase())
+                          );
+                          isFetching = loadingSerials[rowItemCode || ''];
+                        } else {
+                          // No item_code set yet, search globally
+                          allSerials = globalAvailableSerials;
+                          matchedSerials = globalAvailableSerials.filter(s => 
+                            s.serial_number.toLowerCase().includes(serialSearchVal.toLowerCase())
+                          );
+                          isFetching = loadingGlobalSerials;
+                        }
+
+                        const reqQty = row.qty || 1;
+                        const selCount = selectedSerials.length;
+                        
+                        // Status styling for serial selection progress
+                        let badgeClass = "text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400 border border-amber-200/50";
+                        let statusText = `${selCount} of ${reqQty} selected`;
+                        if (selCount === reqQty) {
+                          badgeClass = "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 dark:text-emerald-400 border border-emerald-200/50";
+                          statusText = "✓ Complete";
+                        } else if (selCount > reqQty) {
+                          badgeClass = "text-rose-600 bg-rose-50 dark:bg-rose-950/30 dark:text-rose-400 border border-rose-200/50";
+                          statusText = `⚠ Too many (${selCount}/${reqQty})`;
+                        }
+
+                        const toggleSerial = (sn: string) => {
+                          let next: string[];
+                          if (selectedSerials.includes(sn)) {
+                            next = selectedSerials.filter(s => s !== sn);
+                          } else {
+                            next = [...selectedSerials, sn];
+                          }
+                          updateHardwareRow(row.id, { specifications: next.join(', ') });
+                        };
+
+                        const handleAutoFill = () => {
+                          const availableFiltered = row.deduct_location 
+                            ? allSerials.filter(s => s.location === row.deduct_location)
+                            : allSerials;
+                          
+                          // Prioritize serials that aren't already selected elsewhere if possible
+                          const toSelect = availableFiltered.slice(0, reqQty).map(s => s.serial_number);
+                          updateHardwareRow(row.id, { specifications: toSelect.join(', ') });
+                          
+                          // Show notification
+                          showSuccess('Auto-Filled', `Auto-selected ${toSelect.length} available serials for this item.`);
+                        };
+
+                        return (
+                          <>
+                            <label className="text-xs font-bold text-slate-500 uppercase flex items-center justify-between">
+                              <span className="flex items-center gap-1">
+                                Item Specifications / Serial Numbers (Required)
+                                <span className="text-rose-500 font-extrabold">*</span>
+                              </span>
+                              <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono font-bold ${badgeClass}`}>
+                                {statusText}
+                              </span>
+                            </label>
+
+                            {/* Selected serials pills */}
+                            {selectedSerials.length > 0 && (
+                              <div className="flex flex-wrap gap-1 p-1.5 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30 max-h-24 overflow-y-auto">
+                                {selectedSerials.map(sn => (
+                                  <span 
+                                    key={sn}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-brand-orange/10 text-brand-orange dark:bg-brand-orange/20 text-xs font-mono font-medium border border-brand-orange/20"
+                                  >
+                                    {sn}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleSerial(sn)}
+                                      className="text-brand-orange hover:text-rose-600 border-none bg-transparent cursor-pointer p-0 ml-0.5 flex items-center justify-center"
+                                    >
+                                      <X size={10} strokeWidth={2.5} />
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Help / auto-fill links */}
+                            <div className="flex items-center justify-between text-[10px] text-slate-400">
+                              <span>Select exactly {reqQty} serial{reqQty > 1 ? 's' : ''}</span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={handleAutoFill}
+                                  className="text-brand-orange hover:underline font-bold border-none bg-transparent cursor-pointer"
+                                >
+                                  Auto-Fill (FIFO)
+                                </button>
+                                {selectedSerials.length > 0 && (
+                                  <>
+                                    <span className="text-slate-300">|</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateHardwareRow(row.id, { specifications: '' })}
+                                      className="text-slate-500 hover:text-rose-600 font-semibold border-none bg-transparent cursor-pointer"
+                                    >
+                                      Clear All
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="relative serial-dropdown-container">
+                              <input
+                                type="text"
+                                placeholder="Search & add stock serial numbers..."
+                                value={serialSearchVal}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setSerialSearchQueries(prev => ({ ...prev, [row.id]: val }));
+                                  setSerialDropdownOpens(prev => ({ ...prev, [row.id]: true }));
+                                  if (rowItemCode) {
+                                    fetchSerialsForItem(rowItemCode);
+                                  } else {
+                                    fetchGlobalSerials();
+                                  }
+                                }}
+                                onFocus={() => {
+                                  setSerialDropdownOpens(prev => ({ ...prev, [row.id]: true }));
+                                  if (rowItemCode) {
+                                    fetchSerialsForItem(rowItemCode);
+                                  } else {
+                                    fetchGlobalSerials();
+                                  }
+                                }}
+                                className={`w-full px-3 py-1 pr-8 rounded-lg border text-sm font-mono focus:outline-none ${
+                                  isDarkMode ? 'bg-slate-955 border-slate-808 text-white' : 'bg-white border-slate-205 text-slate-800'
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const isOpen = !serialDropdownOpens[row.id];
+                                  setSerialDropdownOpens(prev => ({ ...prev, [row.id]: isOpen }));
+                                  if (isOpen) {
+                                    if (rowItemCode) {
+                                      fetchSerialsForItem(rowItemCode);
+                                    } else {
+                                      fetchGlobalSerials();
+                                    }
+                                  }
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 border-none bg-transparent cursor-pointer p-0.5"
+                              >
+                                {isFetching ? (
+                                  <Loader2 size={13} className="animate-spin" />
+                                ) : (
+                                  <ChevronDown size={14} />
+                                )}
+                              </button>
+
+                              {serialDropdownOpens[row.id] && (
+                                <div className={`absolute left-0 right-0 top-full mt-1 rounded-xl border shadow-xl z-30 p-1 max-h-48 overflow-y-auto ${
+                                  isDarkMode ? 'bg-slate-955 border-slate-800 text-white' : 'bg-white border-slate-205 text-slate-800'
+                                }`}>
+                                  {isFetching ? (
+                                    <p className="p-3 text-xs italic text-slate-400 text-center flex items-center justify-center gap-1">
+                                      <Loader2 size={12} className="animate-spin text-brand-orange" /> Loading stock serials...
+                                    </p>
+                                  ) : (
+                                    <>
+                                      {matchedSerials.map((s, sIdx) => {
+                                        const equip = equipmentList.find(e => e.item_code === s.item_code);
+                                        const itemDesc = equip ? (equip.description || equip.item_name) : s.item_code;
+                                        const isSel = selectedSerials.includes(s.serial_number);
+                                        return (
+                                          <button
+                                            key={`${s.serial_number}-${sIdx}`}
+                                            type="button"
+                                            onClick={() => {
+                                              if (!row.item_code) {
+                                                updateHardwareRow(row.id, { 
+                                                  specifications: s.serial_number,
+                                                  item_code: s.item_code,
+                                                  description: itemDesc,
+                                                  deduct_location: s.location || row.deduct_location 
+                                                });
+                                                setHardwareSearchQueries(prev => ({ ...prev, [row.id]: itemDesc }));
+                                                setSerialDropdownOpens(prev => ({ ...prev, [row.id]: false }));
+                                              } else {
+                                                toggleSerial(s.serial_number);
+                                              }
+                                            }}
+                                            className={`w-full text-left p-2 rounded-lg text-xs leading-normal transition-all flex flex-col gap-0.5 ${
+                                              isSel 
+                                                ? (isDarkMode ? 'bg-slate-900 text-brand-orange border border-brand-orange/20' : 'bg-orange-50/55 text-brand-orange border border-orange-200/50') 
+                                                : (isDarkMode ? 'hover:bg-slate-900 hover:text-amber-400' : 'hover:bg-amber-50 hover:text-brand-orange')
+                                            }`}
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <span className="font-bold font-mono text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                                                {isSel && <Check size={12} className="text-brand-orange" strokeWidth={3} />}
+                                                {s.serial_number}
+                                              </span>
+                                              {!row.item_code && (
+                                                <span className="text-[9px] px-1.5 py-0.2 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded font-mono truncate max-w-[120px]">
+                                                  {s.item_code}
+                                                </span>
+                                              )}
+                                            </div>
+                                            {itemDesc && (
+                                              <span className="text-[10px] text-slate-500 dark:text-slate-400 truncate pl-4">
+                                                {itemDesc}
+                                              </span>
+                                            )}
+                                            <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-0.5 pt-0.5 border-t border-slate-100 dark:border-slate-800/55 pl-4">
+                                              <span>Location: <span className="font-bold text-slate-600 dark:text-slate-300">{s.location || 'Unknown'}</span></span>
+                                              <span className="px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 uppercase tracking-wider text-[8px]">
+                                                {s.condition ? s.condition.replace('_', ' ') : 'brand new'}
+                                              </span>
+                                            </div>
+                                          </button>
+                                        );
+                                      })}
+
+                                      {matchedSerials.length === 0 && (
+                                        <div className="p-3 text-xs italic text-slate-400 text-center flex flex-col gap-1">
+                                          <span>No available stock serials found</span>
+                                          {row.deduct_location && (
+                                            <span className="text-[10px] text-slate-500">
+                                              (Filtered for location: {row.deduct_location})
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {/* Remarks field */}
@@ -1707,7 +2351,8 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
 
             {hardwareItems.length === 0 && (
@@ -1868,8 +2513,33 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                       <td className="border-r border-zinc-400 px-2 py-1 text-center font-bold font-mono text-zinc-900">{hw.qty}</td>
                       <td className="border-r border-zinc-400 px-2 py-1 text-center text-zinc-600 font-sans">{hw.unit}</td>
                       <td className="border-r border-zinc-400 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px]" title={hw.description}>{hw.description || '------'}</td>
-                      <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 truncate max-w-[150px]" title={hw.specifications}>{hw.specifications || '------'}</td>
-                      <td className="px-3 py-1 text-zinc-600 truncate max-w-[140px]" title={hw.remarks}>{hw.remarks || '------'}</td>
+                      <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 truncate max-w-[150px]" title={hw.specifications}>
+                        {(() => {
+                          const rowItemCode = hw.item_code;
+                          const isSerialized = isSerializedItem(rowItemCode, hw.description);
+                          if (isSerialized && hw.specifications) {
+                            return formatSerialRanges(hw.specifications);
+                          }
+                          return hw.specifications || '------';
+                        })()}
+                      </td>
+                      <td className="px-3 py-1 text-zinc-600 truncate max-w-[140px]" title={hw.remarks}>
+                        {(() => {
+                          if (!hw.remarks) return '------';
+                          const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
+                          if (bName) {
+                            const bColor = getBundleColor(bName);
+                            if (bColor) {
+                              return (
+                                <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
+                                  {hw.remarks}
+                                </span>
+                              );
+                            }
+                          }
+                          return hw.remarks;
+                        })()}
+                      </td>
                     </tr>
                   ))}
                   {/* Fill empty lines up to 8 rows for that notepad look */}

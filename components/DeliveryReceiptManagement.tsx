@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { syncSchoolMonitoringWithDRs } from './monitoringSync';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { getBundleColor } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, 
@@ -1659,7 +1660,23 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                                 {hw.description || '------'}
                               </td>
                               <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>{hw.specifications || hw.serialNumber || '------'}</td>
-                              <td className={`px-3 py-1 text-zinc-650 truncate max-w-[140px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.remarks}>{hw.remarks || '------'}</td>
+                              <td className={`px-3 py-1 text-zinc-650 truncate max-w-[140px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.remarks}>
+                                {(() => {
+                                  if (!hw.remarks) return '------';
+                                  const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
+                                  if (bName) {
+                                    const bColor = getBundleColor(bName);
+                                    if (bColor) {
+                                      return (
+                                        <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
+                                          {hw.remarks}
+                                        </span>
+                                      );
+                                    }
+                                  }
+                                  return hw.remarks;
+                                })()}
+                              </td>
                             </tr>
                           );
                         })}
