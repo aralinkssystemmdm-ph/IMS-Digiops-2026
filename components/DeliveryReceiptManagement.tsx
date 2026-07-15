@@ -1770,15 +1770,9 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                               <td className={`border-r border-zinc-300 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.description}>
                                 {hw.description || '------'}
                               </td>
-                              <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>
+                              <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 whitespace-normal break-words ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>
                                 {(() => {
-                                  const rowItemCode = hw.item_code || hw.itemCode;
-                                  const isSerialized = isSerializedItem(rowItemCode, hw.description);
-                                  const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
                                   const serialsVal = hw.specifications || hw.serialNumber;
-                                  if ((isSerialized || isBundled) && serialsVal) {
-                                    return formatSerialRanges(serialsVal);
-                                  }
                                   return serialsVal || '------';
                                 })()}
                               </td>

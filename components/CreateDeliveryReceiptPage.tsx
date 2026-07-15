@@ -2611,16 +2611,8 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                       <td className="border-r border-zinc-400 px-2 py-1 text-center font-bold font-mono text-zinc-900">{hw.qty}</td>
                       <td className="border-r border-zinc-400 px-2 py-1 text-center text-zinc-600 font-sans">{hw.unit}</td>
                       <td className="border-r border-zinc-400 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px]" title={hw.description}>{hw.description || '------'}</td>
-                      <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 truncate max-w-[150px]" title={hw.specifications}>
-                        {(() => {
-                          const rowItemCode = hw.item_code;
-                          const isSerialized = isSerializedItem(rowItemCode, hw.description);
-                          const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
-                          if ((isSerialized || isBundled) && hw.specifications) {
-                            return formatSerialRanges(hw.specifications);
-                          }
-                          return hw.specifications || '------';
-                        })()}
+                      <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 whitespace-normal break-words" title={hw.specifications}>
+                        {hw.specifications || '------'}
                       </td>
                       <td className="px-3 py-1 text-zinc-600 truncate max-w-[140px]" title={hw.remarks}>
                         {(() => {
