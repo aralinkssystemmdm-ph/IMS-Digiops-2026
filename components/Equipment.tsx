@@ -101,7 +101,7 @@ const Equipment: React.FC<EquipmentProps> = ({ initialTab = 'equipment', isDarkM
     if (showLoading) setLoading(true);
     try {
       const [equipResponse, bundleResponse] = await Promise.all([
-        supabase.from('equipment').select('*').is('archived_at', null).order('description', { ascending: true }),
+        supabase.from('equipment').select('*').is('archived_at', null).order('item_code', { ascending: true }),
         supabase.from('bundle_items').select('*').is('archived_at', null).order('description', { ascending: true })
       ]);
       const mapStatus = (s: string) => {
@@ -146,7 +146,7 @@ const Equipment: React.FC<EquipmentProps> = ({ initialTab = 'equipment', isDarkM
 
   const filteredData = useMemo(() => {
     const baseItems = activeTab === 'equipment' ? equipmentItems : groupedBundles;
-    return baseItems.filter((item: any) => {
+    const filtered = baseItems.filter((item: any) => {
       const matchesSearch = (item.item_code || item.code || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
                            (item.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                            (item.bundle || '').toLowerCase().includes(searchQuery.toLowerCase());
@@ -154,6 +154,13 @@ const Equipment: React.FC<EquipmentProps> = ({ initialTab = 'equipment', isDarkM
       if (statusFilter === 'All') return true;
       return item.status === statusFilter;
     });
+
+    if (activeTab === 'equipment') {
+      return [...filtered].sort((a, b) => 
+        (a.item_code || '').localeCompare(b.item_code || '', undefined, { numeric: true, sensitivity: 'base' })
+      );
+    }
+    return filtered;
   }, [activeTab, equipmentItems, groupedBundles, searchQuery, statusFilter]);
 
   const paginatedData = useMemo(() => {

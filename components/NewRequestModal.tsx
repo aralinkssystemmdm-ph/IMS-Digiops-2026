@@ -85,6 +85,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [schools, setSchools] = useState<SchoolItem[]>([]);
+  const [schoolsList, setSchoolsList] = useState<SchoolItem[]>([]);
+  const [schoolType, setSchoolType] = useState<'new' | 'existing'>('new');
   const [monitoringRecords, setMonitoringRecords] = useState<any[]>([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isBundleDropdownOpen, setIsBundleDropdownOpen] = useState(false);
@@ -217,6 +219,26 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
     setSchools(Array.from(uniqueSchoolsMap.values()));
   }, []);
 
+  const fetchSchoolsList = useCallback(async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const { data, error } = await supabase
+        .from('schools')
+        .select('name, customer_code, is_buffer')
+        .order('name');
+      if (!error && data) {
+        const formatted = data.map((s: any) => ({
+          name: s.name,
+          customer_code: s.customer_code,
+          is_buffer: s.is_buffer === true || String(s.is_buffer) === 'true'
+        }));
+        setSchoolsList(formatted);
+      }
+    } catch (e) {
+      console.error('Error fetching schools list from table:', e);
+    }
+  }, []);
+
   const fetchUserAccounts = useCallback(async () => {
     if (!isSupabaseConfigured) return;
     setIsLoadingUsers(true);
@@ -328,6 +350,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   }, [selectedSchools, initialData]);
 
   const schoolMonitoringBundles = useMemo(() => {
+    if (schoolType === 'existing') return [];
     const bundlesMap = new Map<string, any[]>();
     selectedSchools.forEach(schoolName => {
       const rec = monitoringRecords.find(r => r.school_name === schoolName);
@@ -350,7 +373,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
       }
     });
     return Array.from(bundlesMap.entries()).map(([name, items]) => ({ name, items }));
-  }, [selectedSchools, monitoringRecords]);
+  }, [selectedSchools, monitoringRecords, schoolType]);
 
   useEffect(() => {
     const fetchBundlesForProgram = async () => {
@@ -463,6 +486,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
       setBundleQuantity('1');
       setSelectedBundleDropdown('');
       fetchMonitoringRecords();
+      fetchSchoolsList();
       fetchEquipment();
       fetchUserAccounts();
       setIsDropdownOpen(false);
@@ -479,6 +503,13 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         setDateOfRequest(initialData.date || getTodayIso());
         setProgram(initialData.program || '');
         setRemarks(initialData.remarks || '');
+        if (initialData.school_monitoring_id) {
+          setSchoolType('new');
+        } else if (initialData.schoolName) {
+          setSchoolType('existing');
+        } else {
+          setSchoolType('new');
+        }
         if (initialData.schoolName) {
           setSelectedSchools(initialData.schoolName.split(',').map(s => s.trim()).filter(Boolean));
         } else {
@@ -528,7 +559,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         }
       }
     }
-  }, [isOpen, initialData, fetchMonitoringRecords, fetchEquipment, prefillItem, prefillCode, fetchNextControlNo]);
+  }, [isOpen, initialData, fetchMonitoringRecords, fetchSchoolsList, fetchEquipment, prefillItem, prefillCode, fetchNextControlNo]);
 
   if (!isOpen) return null;
 
@@ -545,6 +576,9 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
     setSelectedSchools(newSelected);
 
     if (!isSelected) {
+      if (schoolType === 'existing') {
+        return;
+      }
       // 1. Auto-populate Program
       const matchingRec = monitoringRecords.find(r => r.school_name === schoolName);
       if (matchingRec) {
@@ -915,7 +949,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
 
       const joinedSchools = selectedSchools.join(', ');
       const firstSelectedSchool = selectedSchools[0];
-      const selectedSchoolData = schools.find(s => s.name === firstSelectedSchool);
+      const selectedSchoolData = (schoolType === 'new' ? schools : schoolsList).find(s => s.name === firstSelectedSchool);
       const isSelectedSchoolBuffer = selectedSchoolData?.is_buffer === true || String(selectedSchoolData?.is_buffer) === 'true';
       const schoolMonitoringId = selectedSchoolData?.school_monitoring_id || null;
 
@@ -1045,7 +1079,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   };
 
   const firstSelectedSchool = selectedSchools[0] || '';
-  const selectedSchoolData = schools.find(s => s.name === firstSelectedSchool);
+  const selectedSchoolData = (schoolType === 'new' ? schools : schoolsList).find(s => s.name === firstSelectedSchool);
   const isSelectedSchoolBuffer = selectedSchoolData?.is_buffer === true || String(selectedSchoolData?.is_buffer) === 'true';
 
   return (
@@ -1246,7 +1280,60 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">{toTitleCase("School Name")} <span style={{ color: 'var(--brand-accent)' }}>*</span></label>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                  {toTitleCase("School Name")} <span style={{ color: 'var(--brand-accent)' }}>*</span>
+                </label>
+                
+                {/* School Type Selector */}
+                <div className="flex items-center bg-slate-100 dark:bg-slate-950 p-0.5 rounded-lg border border-slate-200 dark:border-slate-800 text-[10px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (schoolType !== 'new') {
+                        setSchoolType('new');
+                        setSelectedSchools([]);
+                        setSchoolSearchText('');
+                        setProgram('');
+                        setRequestedItems([]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-all uppercase tracking-wider cursor-pointer ${
+                      schoolType === 'new'
+                        ? 'text-white shadow-xs'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                    }`}
+                    style={{
+                      backgroundColor: schoolType === 'new' ? 'var(--brand-accent)' : undefined
+                    }}
+                  >
+                    New School
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (schoolType !== 'existing') {
+                        setSchoolType('existing');
+                        setSelectedSchools([]);
+                        setSchoolSearchText('');
+                        setProgram('');
+                        setRequestedItems([]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-md transition-all uppercase tracking-wider cursor-pointer ${
+                      schoolType === 'existing'
+                        ? 'text-white shadow-xs'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                    }`}
+                    style={{
+                      backgroundColor: schoolType === 'existing' ? 'var(--brand-accent)' : undefined
+                    }}
+                  >
+                    Existing School
+                  </button>
+                </div>
+              </div>
+
               <div className="relative" ref={dropdownRef}>
                 <div
                   onClick={(e) => {
@@ -1283,7 +1370,9 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                       </div>
                     ))
                   ) : (
-                    <span className="text-slate-400 dark:text-slate-500">Select School(s)</span>
+                    <span className="text-slate-400 dark:text-slate-500">
+                      {schoolType === 'new' ? 'Select School Monitoring Record(s)' : 'Select Management School(s)'}
+                    </span>
                   )}
                   <div className="ml-auto flex items-center gap-2">
                     {selectedSchools.length > 0 && (
@@ -1301,25 +1390,25 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                     <ChevronDown size={16} className={`text-slate-400 dark:text-slate-500 transition-transform duration-200 shrink-0 ${isDropdownOpen ? 'rotate-180' : ''}`} style={{ color: isDropdownOpen ? 'var(--brand-accent)' : undefined }} />
                   </div>
                 </div>
-
-                {isDropdownOpen && (
-                  <div className={`absolute z-[130] left-0 right-0 ${dropdownDirection === 'up' ? 'bottom-full mb-2' : 'mt-2'} bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in ${dropdownDirection === 'up' ? 'slide-in-from-bottom-2' : 'slide-in-from-top-2'} duration-200`}>
-                    <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-700">
-                      <div className="relative">
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <input 
-                          type="text"
-                          placeholder="Search schools..."
-                          value={schoolSearchText}
-                          onChange={(e) => setSchoolSearchText(e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-full pl-9 pr-4 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-lg outline-none focus:border-brand transition-all"
-                        />
-                      </div>
-                    </div>
-                    <div className="max-h-[200px] md:max-h-[260px] overflow-y-auto py-2">
-                      {schools.filter(s => s.name.toLowerCase().includes(schoolSearchText.toLowerCase())).length > 0 ? (
-                        schools.filter(s => s.name.toLowerCase().includes(schoolSearchText.toLowerCase())).map((school, i) => {
+ 
+                 {isDropdownOpen && (
+                   <div className={`absolute z-[130] left-0 right-0 ${dropdownDirection === 'up' ? 'bottom-full mb-2' : 'mt-2'} bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in ${dropdownDirection === 'up' ? 'slide-in-from-bottom-2' : 'slide-in-from-top-2'} duration-200`}>
+                     <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-700">
+                       <div className="relative">
+                         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                         <input 
+                           type="text"
+                           placeholder={schoolType === 'new' ? "Search school monitoring records..." : "Search management schools list..."}
+                           value={schoolSearchText}
+                           onChange={(e) => setSchoolSearchText(e.target.value)}
+                           onClick={(e) => e.stopPropagation()}
+                           className="w-full pl-9 pr-4 py-2 text-xs font-medium bg-slate-50 dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-lg outline-none focus:border-brand transition-all"
+                         />
+                       </div>
+                     </div>
+                     <div className="max-h-[200px] md:max-h-[260px] overflow-y-auto py-2">
+                       {(schoolType === 'new' ? schools : schoolsList).filter(s => s.name.toLowerCase().includes(schoolSearchText.toLowerCase())).length > 0 ? (
+                         (schoolType === 'new' ? schools : schoolsList).filter(s => s.name.toLowerCase().includes(schoolSearchText.toLowerCase())).map((school, i) => {
                           const isBufferActual = school.is_buffer === true || String(school.is_buffer) === 'true';
                           const isSelected = selectedSchools.includes(school.name);
                           return (

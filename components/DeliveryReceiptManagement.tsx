@@ -214,6 +214,9 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
   // Selected DR for detail slideover
   const [selectedDR, setSelectedDR] = useState<DeliveryReceipt | null>(null);
 
+  // Equipment list for checking serialization status of items
+  const [equipmentList, setEquipmentList] = useState<any[]>([]);
+
   // Delete Delivery Receipt Confirmation State
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
 
@@ -318,6 +321,17 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
           setReceipts(loaded);
           localStorage.setItem('aralinks_delivery_receipts', JSON.stringify(loaded));
         }
+
+        // Fetch equipment for serialization status checks
+        const { data: equipData, error: equipError } = await supabase
+          .from('equipment')
+          .select('item_code, description, is_serialized, uom, status')
+          .is('archived_at', null);
+
+        if (!equipError && equipData) {
+          const activeItems = equipData.filter((item: any) => item.status === 'ACTIVE');
+          setEquipmentList(activeItems);
+        }
       } catch (err) {
         console.warn('Failed to load delivery receipts from Supabase:', err);
       } finally {
@@ -333,6 +347,103 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
     const agents = receipts.map(r => r.agent);
     return Array.from(new Set(agents)).filter(Boolean);
   }, [receipts]);
+
+  // Helper to determine if an item is serialized
+  const isSerializedItem = (itemCode?: string, description?: string) => {
+    if (!itemCode && !description) return false;
+    
+    const cleanCode = itemCode ? itemCode.trim().toUpperCase() : '';
+    const cleanDesc = description ? description.trim().toLowerCase() : '';
+
+    // Try finding in equipmentList by item_code
+    let equip = cleanCode 
+      ? equipmentList.find(e => (e.item_code || '').trim().toUpperCase() === cleanCode)
+      : null;
+
+    // Try finding in equipmentList by description as a fallback
+    if (!equip && cleanDesc) {
+      equip = equipmentList.find(e => (e.description || '').trim().toLowerCase() === cleanDesc);
+    }
+
+    if (equip) {
+      const val = equip.is_serialized;
+      if (val === true || val === 1 || val === '1') return true;
+      if (typeof val === 'string') {
+        const upper = val.trim().toUpperCase();
+        return upper === 'YES' || upper === 'TRUE';
+      }
+    }
+
+    return false;
+  };
+
+  // Format serial numbers into ranges (e.g. GOO-25-15 to GOO-25-34) if consecutive
+  const formatSerialRanges = (serialsString: string): string => {
+    if (!serialsString) return '------';
+    const serials = serialsString.split(',').map(s => s.trim()).filter(Boolean);
+    if (serials.length === 0) return '------';
+
+    interface SerialInfo {
+      original: string;
+      prefix: string;
+      numStr: string;
+      numVal: number;
+    }
+
+    const parsed: SerialInfo[] = serials.map(s => {
+      const match = s.match(/^(.*?)(\d+)$/);
+      if (match) {
+        return {
+          original: s,
+          prefix: match[1],
+          numStr: match[2],
+          numVal: parseInt(match[2], 10)
+        };
+      } else {
+        return {
+          original: s,
+          prefix: s,
+          numStr: '',
+          numVal: -1
+        };
+      }
+    });
+
+    // Sort parsed serials to ensure consecutive grouping works even if selected in random order
+    parsed.sort((a, b) => {
+      if (a.prefix !== b.prefix) {
+        return a.prefix.localeCompare(b.prefix);
+      }
+      return a.numVal - b.numVal;
+    });
+
+    const ranges: string[] = [];
+    let i = 0;
+    while (i < parsed.length) {
+      const start = parsed[i];
+      let end = start;
+
+      if (start.numVal !== -1) {
+        while (
+          i + 1 < parsed.length &&
+          parsed[i + 1].prefix === start.prefix &&
+          parsed[i + 1].numVal === end.numVal + 1
+        ) {
+          end = parsed[i + 1];
+          i++;
+        }
+      }
+
+      if (start.original === end.original) {
+        ranges.push(start.original);
+      } else {
+        ranges.push(`${start.original} to ${end.original}`);
+      }
+      i++;
+    }
+
+    return ranges.join(', ');
+  };
 
   // Handle Create DR Route Trigger
   const handleCreateDR = () => {
@@ -1659,7 +1770,18 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                               <td className={`border-r border-zinc-300 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.description}>
                                 {hw.description || '------'}
                               </td>
-                              <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>{hw.specifications || hw.serialNumber || '------'}</td>
+                              <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>
+                                {(() => {
+                                  const rowItemCode = hw.item_code || hw.itemCode;
+                                  const isSerialized = isSerializedItem(rowItemCode, hw.description);
+                                  const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
+                                  const serialsVal = hw.specifications || hw.serialNumber;
+                                  if ((isSerialized || isBundled) && serialsVal) {
+                                    return formatSerialRanges(serialsVal);
+                                  }
+                                  return serialsVal || '------';
+                                })()}
+                              </td>
                               <td className={`px-3 py-1 text-zinc-650 truncate max-w-[140px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.remarks}>
                                 {(() => {
                                   if (!hw.remarks) return '------';

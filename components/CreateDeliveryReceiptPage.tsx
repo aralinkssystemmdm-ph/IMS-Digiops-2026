@@ -142,6 +142,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
   const [signatoryCheckedReceived, setSignatoryCheckedReceived] = useState<DRSignatory>({ name: '', date: '', type: 'pending' });
 
   // Autocomplete UI controllers
+  const [schoolType, setSchoolType] = useState<'new' | 'existing'>('new');
   const [schoolSearchQuery, setSchoolSearchQuery] = useState('');
   const [isSchoolDropdownOpen, setIsSchoolDropdownOpen] = useState(false);
   const [monitoringRecords, setMonitoringRecords] = useState<any[]>([]);
@@ -341,7 +342,9 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             setDateOfAcceptance(found.date);
             setDeliveredTo(found.schoolName || found.deliveredTo || '');
             setSchoolSearchQuery(found.schoolName || found.deliveredTo || '');
-            setSchoolMonitoringId(found.school_monitoring_id || found.schoolMonitoringId || '');
+            const smId = found.school_monitoring_id || found.schoolMonitoringId || '';
+            setSchoolMonitoringId(smId);
+            setSchoolType(smId ? 'new' : 'existing');
             setClientCode(found.clientCode || '');
             setAddress(found.address || '');
             setAgent(found.agent || '');
@@ -501,7 +504,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     const schoolName = school.school_name || school.name || '';
     setDeliveredTo(schoolName);
     setSchoolSearchQuery(schoolName);
-    const smId = school.school_monitoring_id || school.id || '';
+    const smId = schoolType === 'new' ? (school.school_monitoring_id || school.id || '') : '';
     setSchoolMonitoringId(smId);
     setClientCode(school.customer_code || school.customerCode || '');
     setAddress(school.location || school.address || 'BAGUIO CITY, BEN');
@@ -517,51 +520,59 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       setMoa('S.Y. 2023 TO S.Y. 2024 TO S.Y. 2025-26');
     }
 
-    // Auto populate all hardware items from school monitoring
-    const hasBundles = school.items && school.items.some((it: any) => it.bundle_name);
-    if (hasBundles) {
+    if (schoolType === 'existing') {
+      // Do not auto populate hardware delivered for existing schools
       setHardwareItems([]);
-      showInfo('Bundles Detected', `This school contains bundle packages. Click the bundle(s) below to populate hardware items.`);
-    } else if (school.items && school.items.length > 0) {
-      const populatedHardware = school.items.map((it: any, index: number) => {
-        const itemCode = it.item_code || '';
-        const matched = MOCK_HARDWARE_CATALOG.find(c => c.code === itemCode);
-        return {
-          id: `hw-${itemCode}-${index}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          qty: it.quantity || it.qty || 1,
-          unit: it.unit || it.uom || matched?.unit || 'pcs',
-          description: it.item_name || it.description || '',
-          specifications: it.specifications || matched?.spec || '',
-          remarks: it.remarks || '',
-          item_code: itemCode
-        };
-      });
-      setHardwareItems(populatedHardware);
-      showInfo('Hardware Populated', `Loaded ${populatedHardware.length} items from ${schoolName}'s monitoring record.`);
+      showInfo('Existing School Selected', `Selected ${schoolName}. No hardware was auto-populated. You can add items manually.`);
     } else {
-      setHardwareItems([]);
+      // Auto populate all hardware items from school monitoring
+      const hasBundles = school.items && school.items.some((it: any) => it.bundle_name);
+      if (hasBundles) {
+        setHardwareItems([]);
+        showInfo('Bundles Detected', `This school contains bundle packages. Click the bundle(s) below to populate hardware items.`);
+      } else if (school.items && school.items.length > 0) {
+        const populatedHardware = school.items.map((it: any, index: number) => {
+          const itemCode = it.item_code || '';
+          const matched = MOCK_HARDWARE_CATALOG.find(c => c.code === itemCode);
+          return {
+            id: `hw-${itemCode}-${index}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            qty: it.quantity || it.qty || 1,
+            unit: it.unit || it.uom || matched?.unit || 'pcs',
+            description: it.item_name || it.description || '',
+            specifications: it.specifications || matched?.spec || '',
+            remarks: it.remarks || '',
+            item_code: itemCode
+          };
+        });
+        setHardwareItems(populatedHardware);
+        showInfo('Hardware Populated', `Loaded ${populatedHardware.length} items from ${schoolName}'s monitoring record.`);
+      } else {
+        setHardwareItems([]);
+      }
     }
 
     setIsSchoolDropdownOpen(false);
   };
 
-  // Filtered Schools list based on School Monitoring database
+  // Filtered Schools list based on School Monitoring database or Schools table
   const filteredSchools = useMemo(() => {
-    if (!schoolSearchQuery) return monitoringRecords;
-    return monitoringRecords.filter(s => 
+    const list = schoolType === 'new' ? monitoringRecords : schoolsList;
+    if (!schoolSearchQuery) return list;
+    return list.filter(s => 
       (s.school_name || s.name || '').toLowerCase().includes(schoolSearchQuery.toLowerCase()) ||
       (s.customer_code || s.customerCode || '').toLowerCase().includes(schoolSearchQuery.toLowerCase())
     );
-  }, [schoolSearchQuery, monitoringRecords]);
+  }, [schoolSearchQuery, schoolType, monitoringRecords, schoolsList]);
 
   // Computed school monitoring record based on selected school name
   const selectedSchoolRecord = useMemo(() => {
+    if (schoolType !== 'new') return null;
     return monitoringRecords.find(r => (r.school_name || r.name || '').toLowerCase() === deliveredTo.toLowerCase());
-  }, [deliveredTo, monitoringRecords]);
+  }, [deliveredTo, schoolType, monitoringRecords]);
 
   // Computed bundles from selected school monitoring record
   const schoolMonitoringBundles = useMemo(() => {
-    if (!selectedSchoolRecord || !selectedSchoolRecord.items || !Array.isArray(selectedSchoolRecord.items)) {
+    if (schoolType !== 'new' || !selectedSchoolRecord || !selectedSchoolRecord.items || !Array.isArray(selectedSchoolRecord.items)) {
       return [];
     }
     const bundlesMap = new Map<string, any[]>();
@@ -581,7 +592,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       }
     });
     return Array.from(bundlesMap.entries()).map(([name, items]) => ({ name, items }));
-  }, [selectedSchoolRecord]);
+  }, [selectedSchoolRecord, schoolType]);
 
   const handleApplyMonitoringBundleDirect = (bundleName: string, items: any[]) => {
     const populatedHardware = items.map((it: any, index: number) => {
@@ -814,6 +825,14 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
           numVal: -1
         };
       }
+    });
+
+    // Sort parsed serials to ensure consecutive grouping works even if selected in random order
+    parsed.sort((a, b) => {
+      if (a.prefix !== b.prefix) {
+        return a.prefix.localeCompare(b.prefix);
+      }
+      return a.numVal - b.numVal;
     });
 
     const ranges: string[] = [];
@@ -1512,12 +1531,61 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
               </div>
 
               {/* Delivered To Dropdown & Input */}
-              <div className="flex flex-col gap-0.5 sm:col-span-2 relative">
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Delivered To (School Client / Center)</label>
+              <div className="flex flex-col gap-1.5 sm:col-span-2 relative">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Delivered To (School Client / Center)</label>
+                  
+                  {/* School Type Options */}
+                  <div className="flex items-center bg-slate-100 dark:bg-slate-950 p-0.5 rounded-lg border border-slate-200 dark:border-slate-800 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSchoolType('new');
+                        setSchoolSearchQuery('');
+                        setDeliveredTo('');
+                        setSchoolMonitoringId('');
+                        setClientCode('');
+                        setAddress('');
+                        setAgent('');
+                        setProject('');
+                        setHardwareItems([]);
+                      }}
+                      className={`px-2.5 py-1 rounded-md transition-all uppercase tracking-wider cursor-pointer ${
+                        schoolType === 'new'
+                          ? 'bg-brand-orange text-white shadow-xs'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                      }`}
+                    >
+                      New School
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSchoolType('existing');
+                        setSchoolSearchQuery('');
+                        setDeliveredTo('');
+                        setSchoolMonitoringId('');
+                        setClientCode('');
+                        setAddress('');
+                        setAgent('');
+                        setProject('');
+                        setHardwareItems([]);
+                      }}
+                      className={`px-2.5 py-1 rounded-md transition-all uppercase tracking-wider cursor-pointer ${
+                        schoolType === 'existing'
+                          ? 'bg-brand-orange text-white shadow-xs'
+                          : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white'
+                      }`}
+                    >
+                      Existing School
+                    </button>
+                  </div>
+                </div>
+
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="Search standard schools or type manually..."
+                    placeholder={schoolType === 'new' ? "Search school monitoring records..." : "Search management schools list..."}
                     value={schoolSearchQuery}
                     onChange={(e) => {
                       setSchoolSearchQuery(e.target.value);
@@ -1557,7 +1625,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     isDarkMode ? 'bg-slate-900 border-slate-850 text-white' : 'bg-white border-slate-200 text-slate-800'
                   }`}>
                     <p className="text-[10px] font-bold text-brand-orange uppercase p-1.5 tracking-wide border-b border-b-slate-100 dark:border-b-indigo-950/20 mb-1">
-                      Matched School Database Records
+                      {schoolType === 'new' ? 'Matched School Monitoring Records' : 'Matched Management Schools List'}
                     </p>
                     {filteredSchools.map((s, i) => (
                       <button
@@ -1565,11 +1633,19 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                         type="button"
                         onClick={() => handleSelectSchool(s)}
                         className={`w-full text-left p-2 rounded-lg text-sm leading-tight transition-all flex flex-col gap-0.5 ${
-                          isDarkMode ? 'hover:bg-slate-950 hover:text-amber-400' : 'hover:bg-amber-50 hover:text-brand-orange'
+                          isDarkMode ? 'hover:bg-slate-955 hover:text-amber-400' : 'hover:bg-amber-50 hover:text-brand-orange'
                         }`}
                       >
                         <span className="font-bold">{s.school_name || s.name}</span>
-                        <span className="text-[11px] text-brand-orange font-mono font-extrabold">School Monitoring ID: {s.school_monitoring_id || s.id || '-'}</span>
+                        {schoolType === 'new' ? (
+                          <span className="text-[11px] text-brand-orange font-mono font-extrabold">
+                            School Monitoring ID: {s.school_monitoring_id || s.id || '-'}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-emerald-500 font-mono font-extrabold">
+                            Existing School (Client Code: {s.customer_code || '-'})
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -1706,7 +1782,17 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                 <ListPlus size={16} className="text-brand-orange" />
                 <h2 className="text-xs font-black uppercase tracking-widest text-slate-400">Section 2: Hardware Delivered Items</h2>
               </div>
-              <div className="flex gap-1.5 relative">
+              <div className="flex gap-1.5 items-center relative">
+                {schoolType === 'existing' && (
+                  <button
+                    type="button"
+                    onClick={addHardwareRow}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider bg-brand-orange/10 hover:bg-brand-orange/20 text-brand-orange border border-brand-orange/20 transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus size={12} strokeWidth={2.5} />
+                    Add Hardware Row
+                  </button>
+                )}
                 {project && (availableBundles.length > 0 || project === 'ACE') && (
                   <div className="relative" ref={bundleDropdownRef}>
                     <button
@@ -2356,9 +2442,21 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             </div>
 
             {hardwareItems.length === 0 && (
-              <p className="text-xs p-4 italic text-slate-400 text-center dark:bg-slate-950/20 rounded-xl">
-                No hardware units drafted. Click "Add Hardware Row" to populate equipment.
-              </p>
+              <div className="flex flex-col items-center justify-center p-8 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl gap-3 text-center">
+                <p className="text-xs italic text-slate-400 max-w-md">
+                  {schoolType === 'existing'
+                    ? 'No hardware units drafted. Click "Add Hardware Row" below to manually add equipment for this school.'
+                    : 'No hardware units drafted. Selected school monitoring records will auto-populate equipment, or you can add manually.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={addHardwareRow}
+                  className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest bg-brand-orange text-white hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Plus size={14} strokeWidth={2.5} />
+                  Add Hardware Row
+                </button>
+              </div>
             )}
           </div>
 
@@ -2517,7 +2615,8 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                         {(() => {
                           const rowItemCode = hw.item_code;
                           const isSerialized = isSerializedItem(rowItemCode, hw.description);
-                          if (isSerialized && hw.specifications) {
+                          const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
+                          if ((isSerialized || isBundled) && hw.specifications) {
                             return formatSerialRanges(hw.specifications);
                           }
                           return hw.specifications || '------';
