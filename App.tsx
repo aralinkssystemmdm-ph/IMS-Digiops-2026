@@ -516,7 +516,7 @@ const App: React.FC = () => {
 
   const navItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutGrid size={18} /> },
-    { id: 'inventory', label: 'Inventory', icon: <Box size={18} /> },
+    { id: 'inventory', label: 'Inventory / Stocks', icon: <Box size={18} /> },
     { id: 'requests', label: 'Request', icon: <ClipboardList size={18} /> },
     { 
       id: 'school-monitoring' as any, 
@@ -632,7 +632,7 @@ const App: React.FC = () => {
                     />
                     <NavItem 
                       icon={<Box />} 
-                      label="Inventory" 
+                      label="Inventory / Stocks" 
                       isActive={activeView === 'inventory'} 
                       onClick={() => handleNavigate('inventory')} 
                     />

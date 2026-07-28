@@ -48,6 +48,8 @@ interface InventoryItem {
   critical_level: number;
   status: 'Available' | 'Critical';
   is_serialized?: boolean;
+  has_serials?: boolean;
+  has_history?: boolean;
 }
 
 interface LocationStock {
@@ -192,18 +194,26 @@ const Inventory: React.FC<InventoryProps> = ({
     if (showLoading) setLoading(true);
 
     try {
-      const { data: equipData, error: equipError } = await supabase
+      const { data: equipData } = await supabase
         .from('equipment')
-        .select('item_code, is_serialized');
+        .select('item_code, description, is_serialized, critical_level')
+        .is('archived_at', null);
 
-      const { data: locStocksData, error: locStocksError } = await supabase
+      const { data: locStocksData } = await supabase
         .from('item_location_stocks')
         .select('*');
 
+      const { data: serialsData } = await supabase
+        .from('item_serials')
+        .select('item_code');
+
+      const { data: txData } = await supabase
+        .from('stock_transactions')
+        .select('item_code');
+
       const { data, error } = await supabase
         .from('view_inventory_summary')
-        .select('*')
-        .order(sortField, { ascending: sortDirection === 'asc' });
+        .select('*');
 
       if (locStocksData) {
         setAllLocationStocks(locStocksData);
@@ -211,21 +221,98 @@ const Inventory: React.FC<InventoryProps> = ({
         setAvailableLocations(uniqueLocs);
       }
 
-      if (error) throw error;
-      if (data) {
-        // Map data to calculate status dynamically based on critical_level and add is_serialized
-        const mappedData = data
-          .map((item: any) => {
-            const equip = equipData?.find(e => e.item_code === item.item_code);
-            return {
-              ...item,
-              status: item.total_quantity <= (item.critical_level || 0) ? 'Critical' : 'Available',
-              is_serialized: equip?.is_serialized || false
-            };
-          })
-          .filter((item: any) => item.total_quantity > 0);
-        setInventoryData(mappedData);
+      const serialCodesSet = new Set<string>();
+      if (serialsData) {
+        serialsData.forEach((s: any) => {
+          if (s.item_code) {
+            serialCodesSet.add(s.item_code.trim().toUpperCase());
+          }
+        });
       }
+
+      const txCodesSet = new Set<string>();
+      if (txData) {
+        txData.forEach((t: any) => {
+          if (t.item_code) {
+            txCodesSet.add(t.item_code.trim().toUpperCase());
+          }
+        });
+      }
+
+      if (error && !data && (!equipData || equipData.length === 0)) throw error;
+
+      const summaryMap = new Map<string, any>();
+      if (data) {
+        data.forEach((row: any) => {
+          if (row.item_code) {
+            summaryMap.set(row.item_code.trim().toUpperCase(), row);
+          }
+        });
+      }
+
+      const combinedData: InventoryItem[] = [];
+      const processedCodes = new Set<string>();
+
+      if (equipData) {
+        equipData.forEach((equip: any) => {
+          const codeUpper = (equip.item_code || '').trim().toUpperCase();
+          if (!codeUpper) return;
+          processedCodes.add(codeUpper);
+
+          const summaryRow = summaryMap.get(codeUpper);
+          const totalQty = summaryRow ? (summaryRow.total_quantity || 0) : 0;
+          const critLevel = summaryRow?.critical_level ?? equip.critical_level ?? 0;
+          const hasTx = txCodesSet.has(codeUpper);
+          const hasSerials = serialCodesSet.has(codeUpper) && totalQty > 0;
+          const hasHistory = totalQty > 0 || hasTx;
+
+          combinedData.push({
+            item_code: equip.item_code,
+            item_name: summaryRow?.item_name || equip.description || equip.item_code,
+            total_quantity: totalQty,
+            critical_level: critLevel,
+            status: totalQty <= critLevel ? 'Critical' : 'Available',
+            is_serialized: equip.is_serialized || summaryRow?.is_serialized || false,
+            has_serials: hasSerials,
+            has_history: hasHistory
+          });
+        });
+      }
+
+      if (data) {
+        data.forEach((summaryRow: any) => {
+          const codeUpper = (summaryRow.item_code || '').trim().toUpperCase();
+          if (codeUpper && !processedCodes.has(codeUpper)) {
+            processedCodes.add(codeUpper);
+            const totalQty = summaryRow.total_quantity || 0;
+            const critLevel = summaryRow.critical_level || 0;
+            const hasTx = txCodesSet.has(codeUpper);
+            const hasSerials = serialCodesSet.has(codeUpper) && totalQty > 0;
+            const hasHistory = totalQty > 0 || hasTx;
+
+            combinedData.push({
+              item_code: summaryRow.item_code,
+              item_name: summaryRow.item_name || summaryRow.item_code,
+              total_quantity: totalQty,
+              critical_level: critLevel,
+              status: totalQty <= critLevel ? 'Critical' : 'Available',
+              is_serialized: summaryRow.is_serialized || false,
+              has_serials: hasSerials,
+              has_history: hasHistory
+            });
+          }
+        });
+      }
+
+      combinedData.sort((a, b) => {
+        const valA = (a[sortField] || '').toString().toLowerCase();
+        const valB = (b[sortField] || '').toString().toLowerCase();
+        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+
+      setInventoryData(combinedData);
     } catch (err) {
       console.error('Error fetching inventory:', err);
     } finally {
@@ -456,10 +543,7 @@ const Inventory: React.FC<InventoryProps> = ({
           statusFilter === 'All Statuses' || 
           item.status === statusFilter;
 
-        // Only show items that have quantity based on filters
-        const hasQuantity = item.total_quantity > 0;
-
-        return matchesSearch && matchesStatus && hasQuantity;
+        return matchesSearch && matchesStatus;
       });
   }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks]);
 
@@ -725,7 +809,7 @@ const Inventory: React.FC<InventoryProps> = ({
               }`}
               style={{ color: viewMode === 'list' ? 'var(--brand-header)' : undefined }}
             >
-              Inventory
+              Inventory / Stocks
             </h1>
             {viewMode === 'transfer' && (
               <>
@@ -1097,19 +1181,21 @@ const Inventory: React.FC<InventoryProps> = ({
                       </td>
                       <td className="px-6 py-4 text-right pr-10">
                         <div className="flex items-center justify-end gap-2 text-white">
-                          <button 
-                            onClick={() => handleAction('details', item)}
-                            title="Transaction History"
-                            className={`p-2 rounded-xl transition-all shadow-sm ${
-                              isDarkMode 
-                                ? 'bg-slate-800 text-slate-400 hover:text-white hover:bg-[#FE4E02]' 
-                                : 'bg-slate-50 text-slate-400 hover:text-white hover:bg-[#FE4E02]'
-                            }`}
-                          >
-                            <History size={18} />
-                          </button>
+                          {Boolean(item.has_history) && (
+                            <button 
+                              onClick={() => handleAction('details', item)}
+                              title="Transaction History"
+                              className={`p-2 rounded-xl transition-all shadow-sm ${
+                                isDarkMode 
+                                  ? 'bg-slate-800 text-slate-400 hover:text-white hover:bg-[#FE4E02]' 
+                                  : 'bg-slate-50 text-slate-400 hover:text-white hover:bg-[#FE4E02]'
+                              }`}
+                            >
+                              <History size={18} />
+                            </button>
+                          )}
 
-                          {item.is_serialized && (
+                          {Boolean(item.has_serials) && (
                             <button 
                               onClick={() => {
                                 setSelectedItem(item);

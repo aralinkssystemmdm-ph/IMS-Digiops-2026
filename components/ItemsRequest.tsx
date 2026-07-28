@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Archive, Edit3, Loader2, FileText, Eye, ArrowUp, ArrowDown, CheckSquare, Square, Filter, ChevronDown, ChevronUp, Clock, MapPin, Tag, CheckCircle2, CalendarDays, X, Plus, Check, Calendar, Paperclip, Trash2, Box, History, Printer, ExternalLink, ArrowRightLeft, Notebook, TrendingUp } from 'lucide-react';
+import { Search, Archive, Edit3, Loader2, FileText, Eye, ArrowUp, ArrowDown, CheckSquare, Square, Filter, ChevronDown, ChevronUp, Clock, MapPin, Tag, CheckCircle2, CalendarDays, X, Plus, Check, Calendar, Paperclip, Trash2, Box, History, Printer, ExternalLink, ArrowRightLeft, Notebook, TrendingUp, Download } from 'lucide-react';
 import { toTitleCase, cleanPONumber, getBundleColor, getProgramBadgeClass } from '../lib/utils';
 import NewRequestModal from './NewRequestModal';
 import RequestPreviewModal from './RequestPreviewModal';
@@ -1677,6 +1677,124 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     }
   };
 
+  const handleExportCSV = useCallback(() => {
+    const targetRequests = selectedIds.size > 0
+      ? filteredRequests.filter(r => selectedIds.has(r.id))
+      : filteredRequests;
+
+    if (targetRequests.length === 0) {
+      showError('Export Failed', 'No item request records available to export.');
+      return;
+    }
+
+    const headers = [
+      'Control No',
+      'Ticket No',
+      'School Name',
+      'School Monitoring ID',
+      'Buffer School',
+      'Request Type',
+      'Requisition Date',
+      'Requested By',
+      'Program',
+      'Status',
+      'Deliverables Completion (%)',
+      'Total Items Count',
+      'Total Requested Qty',
+      'Total Delivered Qty',
+      'Total Remaining Qty',
+      'Item List Details',
+      'Deliverables & Serials',
+      'Purpose',
+      'PO Number(s)',
+      'Remarks',
+      'Delivered Date',
+      'Attachment'
+    ];
+
+    const csvRows: string[][] = [];
+
+    targetRequests.forEach(req => {
+      const itemsList = req.items || [];
+      const totalItemsCount = itemsList.length;
+      const totalRequested = itemsList.reduce((sum, item) => sum + (parseInt(item.qty) || 0), 0);
+      const totalDelivered = itemsList.reduce((sum, item) => sum + (parseInt(item.received_quantity) || 0), 0);
+      const totalRemaining = Math.max(0, totalRequested - totalDelivered);
+      const completionPct = totalRequested > 0 ? Math.round((totalDelivered / totalRequested) * 100) : 0;
+
+      const itemsDetailSummary = itemsList.map(item => {
+        const rQty = parseInt(item.qty) || 0;
+        const dQty = parseInt(item.received_quantity) || 0;
+        const remQty = Math.max(0, rQty - dQty);
+        const code = item.item_code ? `[${item.item_code}] ` : '';
+        const bundle = item.bundle_name ? ` (Bundle: ${item.bundle_name})` : '';
+        const uom = item.uom ? ` ${item.uom}` : '';
+        return `${code}${item.item || 'Item'}${bundle} - Requested: ${rQty}${uom}, Delivered: ${dQty}${uom}, Remaining: ${remQty}${uom}`;
+      }).join(' | ');
+
+      const deliverablesSerialsSummary = itemsList.map(item => {
+        const rQty = parseInt(item.qty) || 0;
+        const dQty = parseInt(item.received_quantity) || 0;
+        const serialsStr = Array.isArray(item.serials) && item.serials.length > 0
+          ? item.serials.join('; ')
+          : (typeof item.serials === 'string' && item.serials.trim() ? item.serials.trim() : 'None');
+        return `${item.item_code || item.item || 'Item'}: Delivered ${dQty}/${rQty} (Serials: ${serialsStr})`;
+      }).join(' | ');
+
+      csvRows.push([
+        req.id || '',
+        req.ticketNo || '',
+        req.schoolName || '',
+        req.school_monitoring_id || '',
+        req.bufferSchool || '',
+        req.requestType || 'ARALINKS',
+        req.date || '',
+        req.requestedBy || '',
+        req.program || 'GENERAL',
+        req.status || 'Pending',
+        `${completionPct}%`,
+        String(totalItemsCount),
+        String(totalRequested),
+        String(totalDelivered),
+        String(totalRemaining),
+        itemsDetailSummary,
+        deliverablesSerialsSummary,
+        req.purpose || '',
+        req.poNumber || '',
+        req.remarks || '',
+        req.deliveredAt || '',
+        req.attachment || ''
+      ]);
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...csvRows.map(row => row.map(val => {
+        const str = String(val ?? '').replace(/"/g, '""');
+        return str.includes(',') || str.includes('\n') || str.includes('\r') || str.includes('"') 
+          ? `"${str}"` 
+          : str;
+      }).join(','))
+    ].join('\n');
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    const dateStr = new Date().toISOString().split('T')[0];
+    const fileName = selectedIds.size > 0 
+      ? `item_requests_selected_${dateStr}.csv` 
+      : `item_requests_report_${dateStr}.csv`;
+    link.setAttribute('download', fileName);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showSuccess('Export Successful', `Exported ${targetRequests.length} request(s) with items and deliverables to CSV.`);
+  }, [filteredRequests, selectedIds, showSuccess, showError]);
+
   const handleConfirmDelete = async () => {
     if (!isSupabaseConfigured) return;
 
@@ -2315,6 +2433,15 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         </div>
         
         <div className="flex items-center w-full lg:w-auto gap-3">
+          <button 
+            onClick={handleExportCSV}
+            className="px-4 py-2.5 rounded-xl transition-all flex items-center gap-2 font-bold text-xs border shadow-sm bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 active:scale-95"
+            title="Export Requests to CSV report with items and deliverables"
+          >
+            <Download size={16} style={{ color: 'var(--brand-accent)' }} />
+            <span>Export CSV</span>
+          </button>
+
           {userRole !== 'Staff' && (
             <button 
               onClick={() => {
@@ -2665,6 +2792,14 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
            </div>
            <div className="hidden md:block w-[1px] h-10 bg-white/10"></div>
            <div className="flex items-center gap-3 md:gap-4 w-full md:w-auto">
+              <button 
+                onClick={handleExportCSV}
+                className="flex-grow md:flex-none px-6 md:px-8 py-3 md:py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl md:rounded-2xl flex items-center justify-center gap-3 text-[10px] md:text-[11px] font-bold uppercase tracking-widest shadow-2xl shadow-emerald-600/30 transition-all active:scale-95"
+                title="Export Selected Requests to CSV"
+              >
+                <Download size={16} />
+                {toTitleCase("Export CSV")}
+              </button>
               <button 
                 onClick={triggerBulkDelete}
                 className="flex-grow md:flex-none px-6 md:px-8 py-3 md:py-3.5 bg-red-500 hover:bg-red-600 text-white rounded-xl md:rounded-2xl flex items-center justify-center gap-3 text-[10px] md:text-[11px] font-bold uppercase tracking-widest shadow-2xl shadow-red-500/30 transition-all active:scale-95"
