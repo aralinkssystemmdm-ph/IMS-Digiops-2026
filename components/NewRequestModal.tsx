@@ -1141,7 +1141,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
             {toTitleCase(initialData ? 'Edit Item Request' : 'Add Item Request')}
           </h2>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors text-slate-400 dark:text-slate-500">
-            <X size={20} sm:size={24} />
+            <X className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
         </div>
 

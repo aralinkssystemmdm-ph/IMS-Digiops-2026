@@ -1161,7 +1161,7 @@ const Schools: React.FC<SchoolsProps> = ({ isDarkMode = false, userRole = 'Staff
                 onClick={triggerBulkDelete}
                 className="flex-1 sm:flex-none px-4 sm:px-8 py-3 sm:py-3.5 bg-red-500 hover:bg-red-600 text-white rounded-xl sm:rounded-2xl flex items-center justify-center gap-2 sm:gap-3 text-[8px] sm:text-[11px] font-bold tracking-widest shadow-2xl shadow-red-500/30 transition-all active:scale-95"
               >
-                <Trash2 size={14} sm:size={18} />
+                <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 {toTitleCase("Delete Registry")}
               </button>
               <button 

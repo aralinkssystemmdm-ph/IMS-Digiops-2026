@@ -392,7 +392,7 @@ const AddEquipmentModal: React.FC<AddEquipmentModalProps> = ({ isOpen, onClose, 
           <button onClick={onClose} className={`p-2 sm:p-2.5 rounded-2xl transition-colors ${
             isDarkMode ? 'hover:bg-slate-800 text-slate-600' : 'hover:bg-slate-50 text-slate-300'
           }`}>
-            <X size={20} sm:size={24} />
+            <X className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
         </div>
 

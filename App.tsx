@@ -787,10 +787,10 @@ const App: React.FC = () => {
                   >
                     <LayoutGrid size={22} />
                   </button>
-                  <h2 className="font-bold text-lg lg:text-xl tracking-tight font-poppins" style={{ color: '#FFFFFF' }}>Aralinks <span style={{ color: 'var(--brand-accent)' }}>Inventory</span></h2>
+                  <h2 className="font-bold text-base sm:text-lg lg:text-xl tracking-tight font-poppins text-slate-800 dark:text-white">Aralinks <span style={{ color: 'var(--brand-accent)' }}>Inventory</span></h2>
                 </div>
                 <div className="flex items-center gap-3">
-                   <button title="Notifications" className="w-9 h-9 text-slate-400 transition-colors" style={{ '--hover-color': 'var(--brand-accent)' } as any}>
+                   <button title="Notifications" className="w-9 h-9 text-slate-400 transition-colors flex items-center justify-center" style={{ '--hover-color': 'var(--brand-accent)' } as any}>
                     <Bell size={20} />
                   </button>
                   <div 
@@ -932,14 +932,14 @@ const App: React.FC = () => {
             {/* 
               MAIN CONTENT
             */}
-            <main className="flex-grow p-4 lg:p-8 flex flex-col h-full overflow-hidden">
+            <main className="flex-grow p-2 sm:p-4 lg:p-8 flex flex-col h-full overflow-hidden">
               <div className="w-full flex-grow overflow-hidden min-h-0 flex flex-col">
                 <Outlet />
               </div>
             </main>
 
             {/* Floating Theme Selector */}
-            <div className="fixed bottom-6 right-6 z-[40] group/color-floating">
+            <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[40] group/color-floating">
               {/* Tooltip label */}
               <span className={`
                 absolute right-full mr-4 top-1/2 -translate-y-1/2 px-3 py-1.5 

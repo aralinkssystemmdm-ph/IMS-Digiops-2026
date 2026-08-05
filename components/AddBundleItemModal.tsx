@@ -428,7 +428,7 @@ const AddBundleItemModal: React.FC<AddBundleItemModalProps> = ({ isOpen, onClose
           <button onClick={onClose} className={`p-2 rounded-full transition-colors ${
             isDarkMode ? 'hover:bg-slate-800 text-slate-500' : 'hover:bg-slate-100 text-slate-400'
           }`}>
-            <X size={20} sm:size={24} />
+            <X className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
         </div>
         
@@ -918,7 +918,7 @@ const AddBundleItemModal: React.FC<AddBundleItemModalProps> = ({ isOpen, onClose
                   disabled:opacity-50 disabled:pointer-events-none
                 `}
               >
-                {isSubmitting ? <Loader2 className="animate-spin" size={16} sm:size={18} /> : (initialData ? <Check size={16} sm:size={18} /> : <Plus size={16} sm:size={18} />)}
+                {isSubmitting ? <Loader2 className="animate-spin w-4 h-4 sm:w-4.5 sm:h-4.5" /> : (initialData ? <Check className="w-4 h-4 sm:w-4.5 sm:h-4.5" /> : <Plus className="w-4 h-4 sm:w-4.5 sm:h-4.5" />)}
                 {isSubmitting ? 'Saving...' : (initialData ? 'Update Item' : `Add ${selectedItems.length} Items`)}
               </button>
             )}

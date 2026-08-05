@@ -582,8 +582,18 @@ const Inventory: React.FC<InventoryProps> = ({
   const exportToExcel = async () => {
     if (filteredData.length === 0) return;
 
-    // Fetch all location stocks for breakdown and equipment/transaction info
+    // Fetch all location stocks for breakdown and equipment/transaction/serial info
     let locationBreakdownMap: { [key: string]: { [loc: string]: { brand_new: number, used: number, defective: number, disposal: number } } } = {};
+    let locationSerialsMap: { 
+      [key: string]: { 
+        [loc: string]: { 
+          brand_new: string[]; 
+          used: string[]; 
+          defective: string[]; 
+          disposal: string[]; 
+        } 
+      } 
+    } = {};
     let serializedMap: { [key: string]: boolean } = {};
     let uomMap: { [key: string]: string } = {};
     let updatedAtMap: { [key: string]: string } = {};
@@ -593,7 +603,7 @@ const Inventory: React.FC<InventoryProps> = ({
     try {
       const itemCodes = filteredData.map(i => i.item_code);
       
-      const [locResponse, equipResponse, txResponse] = await Promise.all([
+      const [locResponse, equipResponse, txResponse, serialsResponse] = await Promise.all([
         supabase
           .from('item_location_stocks')
           .select('item_code, location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty')
@@ -606,7 +616,11 @@ const Inventory: React.FC<InventoryProps> = ({
           .from('stock_transactions')
           .select('item_code, created_at, created_by')
           .in('item_code', itemCodes)
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('item_serials')
+          .select('item_code, serial_number, location, condition')
+          .in('item_code', itemCodes)
       ]);
 
       if (!locResponse.error && locResponse.data) {
@@ -621,6 +635,37 @@ const Inventory: React.FC<InventoryProps> = ({
             defective: row.defective_qty || 0,
             disposal: row.disposal_qty || 0
           };
+        });
+      }
+
+      if (!serialsResponse.error && serialsResponse.data) {
+        serialsResponse.data.forEach(row => {
+          if (!row.item_code || !row.serial_number) return;
+          const code = row.item_code.trim();
+          const sn = row.serial_number.trim();
+          if (!sn) return;
+
+          const locName = (row.location || '').trim();
+          const condRaw = (row.condition || '').trim().toLowerCase();
+
+          let condKey: 'brand_new' | 'used' | 'defective' | 'disposal' = 'brand_new';
+          if (condRaw.includes('used')) {
+            condKey = 'used';
+          } else if (condRaw.includes('defect')) {
+            condKey = 'defective';
+          } else if (condRaw.includes('dispos')) {
+            condKey = 'disposal';
+          } else if (condRaw.includes('brand') || condRaw.includes('new')) {
+            condKey = 'brand_new';
+          }
+
+          if (!locationSerialsMap[code]) {
+            locationSerialsMap[code] = {};
+          }
+          if (!locationSerialsMap[code][locName]) {
+            locationSerialsMap[code][locName] = { brand_new: [], used: [], defective: [], disposal: [] };
+          }
+          locationSerialsMap[code][locName][condKey].push(sn);
         });
       }
 
@@ -644,6 +689,26 @@ const Inventory: React.FC<InventoryProps> = ({
       console.error('Error fetching breakdown for Excel:', err);
     }
 
+    const getSerialsForLocationAndCondition = (
+      code: string, 
+      targetLoc: string, 
+      condKey: 'brand_new' | 'used' | 'defective' | 'disposal'
+    ) => {
+      const itemLocs = locationSerialsMap[code] || {};
+      const targetNorm = targetLoc.trim().toLowerCase();
+      let serials: string[] = [];
+
+      Object.keys(itemLocs).forEach(locName => {
+        if (locName.trim().toLowerCase() === targetNorm) {
+          if (itemLocs[locName][condKey]) {
+            serials.push(...itemLocs[locName][condKey]);
+          }
+        }
+      });
+
+      return serials.length > 0 ? serials.join(', ') : '';
+    };
+
     // Headers and Column Config
     const headers = [
       "Item Code", 
@@ -651,21 +716,37 @@ const Inventory: React.FC<InventoryProps> = ({
       "UOM",
       "Total Qty", 
       "IT Basement - Brand New",
+      "IT Basement - Brand New Serials",
       "IT Basement - Used",
+      "IT Basement - Used Serials",
       "IT Basement - Defective",
+      "IT Basement - Defective Serials",
       "IT Basement - Disposal",
+      "IT Basement - Disposal Serials",
       "Areys Warehouse - Brand New",
+      "Areys Warehouse - Brand New Serials",
       "Areys Warehouse - Used",
+      "Areys Warehouse - Used Serials",
       "Areys Warehouse - Defective",
+      "Areys Warehouse - Defective Serials",
       "Areys Warehouse - Disposal",
+      "Areys Warehouse - Disposal Serials",
       "Project 6 Warehouse - Brand New",
+      "Project 6 Warehouse - Brand New Serials",
       "Project 6 Warehouse - Used",
+      "Project 6 Warehouse - Used Serials",
       "Project 6 Warehouse - Defective",
+      "Project 6 Warehouse - Defective Serials",
       "Project 6 Warehouse - Disposal",
+      "Project 6 Warehouse - Disposal Serials",
       "Silang Warehouse - Brand New",
+      "Silang Warehouse - Brand New Serials",
       "Silang Warehouse - Used",
+      "Silang Warehouse - Used Serials",
       "Silang Warehouse - Defective",
-      "Silang Warehouse - Disposal"
+      "Silang Warehouse - Defective Serials",
+      "Silang Warehouse - Disposal",
+      "Silang Warehouse - Disposal Serials"
     ];
 
     // Create workbook and worksheet
@@ -707,21 +788,37 @@ const Inventory: React.FC<InventoryProps> = ({
         uomMap[itemCode] || 'N/A',
         item.total_quantity || 0,
         itBasement.brand_new,
+        getSerialsForLocationAndCondition(itemCode, "IT Basement", "brand_new"),
         itBasement.used,
+        getSerialsForLocationAndCondition(itemCode, "IT Basement", "used"),
         itBasement.defective,
+        getSerialsForLocationAndCondition(itemCode, "IT Basement", "defective"),
         itBasement.disposal,
+        getSerialsForLocationAndCondition(itemCode, "IT Basement", "disposal"),
         areysWarehouse.brand_new,
+        getSerialsForLocationAndCondition(itemCode, "Areys Warehouse", "brand_new"),
         areysWarehouse.used,
+        getSerialsForLocationAndCondition(itemCode, "Areys Warehouse", "used"),
         areysWarehouse.defective,
+        getSerialsForLocationAndCondition(itemCode, "Areys Warehouse", "defective"),
         areysWarehouse.disposal,
+        getSerialsForLocationAndCondition(itemCode, "Areys Warehouse", "disposal"),
         project6Warehouse.brand_new,
+        getSerialsForLocationAndCondition(itemCode, "Project 6 Warehouse", "brand_new"),
         project6Warehouse.used,
+        getSerialsForLocationAndCondition(itemCode, "Project 6 Warehouse", "used"),
         project6Warehouse.defective,
+        getSerialsForLocationAndCondition(itemCode, "Project 6 Warehouse", "defective"),
         project6Warehouse.disposal,
+        getSerialsForLocationAndCondition(itemCode, "Project 6 Warehouse", "disposal"),
         silangWarehouse.brand_new,
+        getSerialsForLocationAndCondition(itemCode, "Silang Warehouse", "brand_new"),
         silangWarehouse.used,
+        getSerialsForLocationAndCondition(itemCode, "Silang Warehouse", "used"),
         silangWarehouse.defective,
-        silangWarehouse.disposal
+        getSerialsForLocationAndCondition(itemCode, "Silang Warehouse", "defective"),
+        silangWarehouse.disposal,
+        getSerialsForLocationAndCondition(itemCode, "Silang Warehouse", "disposal")
       ];
 
       const row = worksheet.addRow(rowData);
@@ -796,7 +893,7 @@ const Inventory: React.FC<InventoryProps> = ({
   };
 
   return (
-    <div className="w-full h-full overflow-y-auto px-6 lg:px-12 pr-2 animate-in fade-in duration-500 relative">
+    <div className="w-full h-full overflow-y-auto px-2 sm:px-6 lg:px-12 pr-2 animate-in fade-in duration-500 relative">
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 mt-0 mb-4">
         <div className="flex flex-col">
           <div className="flex items-center gap-2">

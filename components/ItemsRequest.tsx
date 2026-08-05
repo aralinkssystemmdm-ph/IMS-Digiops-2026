@@ -2239,7 +2239,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         }
       `}</style>
 
-      <div className="mx-6 lg:mx-12 pt-0 pb-0">
+      <div className="mx-2 sm:mx-6 lg:mx-12 pt-0 pb-0">
         <PageHeader 
           title="Item Requests" 
           description="View, manage, and track all item requisitions" 
@@ -2247,7 +2247,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         />
       </div>
       
-      <div className="mx-6 lg:mx-12 flex flex-col lg:flex-row lg:items-center justify-between gap-6 mb-8 mt-4">
+      <div className="mx-2 sm:mx-6 lg:mx-12 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6 mb-8 mt-4">
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
           {(['All', 'Pending', 'Partially', 'Completed'] as StatusFilterType[]).map((filter) => (
             <button
@@ -2294,7 +2294,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
           <div className="relative" ref={programRef}>
             <button
               onClick={() => setIsProgramDropdownOpen(!isProgramDropdownOpen)}

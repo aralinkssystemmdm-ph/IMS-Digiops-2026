@@ -1375,7 +1375,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
   };
 
   return (
-    <div className="w-full h-full flex flex-col overflow-auto p-4 lg:p-6 text-slate-800 dark:text-slate-100 font-sans">
+    <div className="w-full h-full flex flex-col overflow-auto p-2 sm:p-4 lg:p-6 text-slate-800 dark:text-slate-100 font-sans">
       
       {/* Header section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
