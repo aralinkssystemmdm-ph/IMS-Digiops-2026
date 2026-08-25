@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { X, CheckCircle2, AlertCircle, Loader2, Plus, Trash2, Hash, Box, History, Calendar, User, Info, ArrowRightLeft, PackageCheck } from 'lucide-react';
+import { X, CheckCircle2, AlertCircle, Loader2, Plus, Trash2, Hash, Box, History, Calendar, User, Info, ArrowRightLeft, PackageCheck, Pencil, Check } from 'lucide-react';
 import { toTitleCase, cleanPONumber } from '../lib/utils';
 import { RequestData } from './ItemsRequest';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -42,6 +42,9 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
   const [expandedSerials, setExpandedSerials] = useState<Record<string, boolean>>({});
 
   const [selectedPOIndex, setSelectedPOIndex] = useState<number | null>(null);
+  const [editingDateGroup, setEditingDateGroup] = useState<string | null>(null);
+  const [editingDateValue, setEditingDateValue] = useState<string>('');
+  const [isUpdatingDate, setIsUpdatingDate] = useState<boolean>(false);
 
   const poList = useMemo(() => {
     if (!request?.poNumber) return [];
@@ -108,9 +111,59 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
     setExpandedSerials(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleStartEditDate = (groupKey: string, currentIsoDate: string) => {
+    try {
+      const d = new Date(currentIsoDate);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      setEditingDateGroup(groupKey);
+      setEditingDateValue(`${yyyy}-${mm}-${dd}`);
+    } catch {
+      setEditingDateGroup(groupKey);
+      setEditingDateValue('');
+    }
+  };
+
+  const handleSaveDate = async (groupKey: string, txIds: string[]) => {
+    if (!editingDateValue) return;
+    setIsUpdatingDate(true);
+    try {
+      const [year, month, day] = editingDateValue.split('-').map(Number);
+      const newDateObj = new Date(year, month - 1, day, 12, 0, 0);
+      const newIso = newDateObj.toISOString();
+
+      if (isSupabaseConfigured) {
+        const { error } = await supabase
+          .from('stock_transactions')
+          .update({ created_at: newIso })
+          .in('id', txIds);
+        if (error) throw error;
+      }
+
+      setHistory(prev =>
+        prev.map(tx => {
+          if (txIds.includes(tx.id)) {
+            return { ...tx, created_at: newIso };
+          }
+          return tx;
+        })
+      );
+
+      setEditingDateGroup(null);
+      showSuccess('Date received updated successfully');
+    } catch (err: any) {
+      console.error('Error updating date received:', err);
+      showError(err.message || 'Failed to update date received');
+    } finally {
+      setIsUpdatingDate(false);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       setSelectedPOIndex(null);
+      setEditingDateGroup(null);
     }
   }, [isOpen]);
 
@@ -188,24 +241,28 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
 
   const groupedHistory = useMemo(() => {
     const groups: { 
+      groupKey: string;
       date: string; 
+      firstCreatedAt: string;
       items: { 
         id: string; 
         name: string; 
         code: string; 
         qty: number; 
-        received_by: string;
-        reason: string;
+        received_by: string; 
+        reason: string; 
         serials?: string[] 
       }[] 
     }[] = [];
     
     history.forEach(tx => {
-      const date = new Date(tx.created_at).toLocaleDateString();
+      const txDate = new Date(tx.created_at);
+      const date = txDate.toLocaleDateString();
+      const groupKey = `${txDate.getFullYear()}-${txDate.getMonth() + 1}-${txDate.getDate()}`;
       
-      let existing = groups.find(g => g.date === date);
+      let existing = groups.find(g => g.groupKey === groupKey || g.date === date);
       if (!existing) {
-        existing = { date, items: [] };
+        existing = { groupKey, date, firstCreatedAt: tx.created_at, items: [] };
         groups.push(existing);
       }
 
@@ -330,86 +387,138 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fetching history...</p>
                   </div>
                 ) : history.length > 0 ? (
-                  <div className="border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden">
-                    <table className="w-full text-left border-collapse">
+                  <div className="border border-slate-100 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
+                    <table className="w-full text-left border-collapse table-fixed">
                       <thead>
-                        <tr className="bg-slate-50 dark:bg-slate-800/50">
-                          <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">Date Received</th>
-                          <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">Item</th>
-                          <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">Qty</th>
-                          <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">Received By</th>
-                          <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-100 dark:border-slate-800">Remarks</th>
+                        <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
+                          <th className="w-[20%] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Date Received</th>
+                          <th className="w-[35%] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Item</th>
+                          <th className="w-[10%] px-4 py-3 text-center text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Qty</th>
+                          <th className="w-[17%] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Received By</th>
+                          <th className="w-[18%] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Remarks</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {groupedHistory.map((group) => (
-                          <React.Fragment key={group.date}>
-                            <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors align-top">
-                              <td className="px-4 py-4 text-[11px] font-bold text-slate-600 dark:text-slate-400">
-                                {group.date}
-                              </td>
-                              <td className="px-4 py-4">
-                                <div className="space-y-3">
-                                  {group.items.map((item, i) => (
-                                    <div key={item.id} className={`${i > 0 ? 'pt-3 border-t border-slate-50 dark:border-slate-800/50' : ''}`}>
-                                      <div className="flex flex-col gap-0.5">
-                                        <span className="text-[11px] font-bold text-slate-800 dark:text-white leading-tight">{item.name}</span>
-                                        {item.serials && item.serials.length > 0 && (
-                                          <button 
-                                            onClick={() => toggleSerials(item.id)}
-                                            className="flex items-center gap-1 text-[#FE4E02] text-[9px] font-black uppercase tracking-widest hover:opacity-80 transition-all w-fit mt-1.5"
+                        {groupedHistory.map((group, groupIdx) => {
+                          const isEditingThisDate = editingDateGroup === group.groupKey;
+                          return group.items.map((item, itemIdx) => {
+                            const isFirstInGroup = itemIdx === 0;
+                            return (
+                              <tr 
+                                key={item.id} 
+                                className={`hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors ${
+                                  isFirstInGroup && groupIdx > 0 ? 'border-t-2 border-slate-200 dark:border-slate-700' : ''
+                                }`}
+                              >
+                                {/* Date Received Column with rowSpan across all items of this date */}
+                                {isFirstInGroup && (
+                                  <td 
+                                    rowSpan={group.items.length} 
+                                    className="px-4 py-3.5 align-top border-r border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30"
+                                  >
+                                    {isEditingThisDate ? (
+                                      <div className="flex flex-col gap-2">
+                                        <input
+                                          type="date"
+                                          value={editingDateValue}
+                                          onChange={(e) => setEditingDateValue(e.target.value)}
+                                          className="px-2 py-1 text-xs font-bold rounded-lg border border-[#FE4E02] bg-white dark:bg-slate-800 text-slate-800 dark:text-white shadow-sm focus:outline-none w-full"
+                                        />
+                                        <div className="flex items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            disabled={isUpdatingDate}
+                                            onClick={() => handleSaveDate(group.groupKey, group.items.map(it => it.id))}
+                                            className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                                            title="Save Date"
                                           >
-                                            <Hash size={10} />
-                                            {expandedSerials[item.id] ? 'Hide Serials' : `Show Serials (${item.serials.length})`}
+                                            {isUpdatingDate ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                                            Save
                                           </button>
-                                        )}
-                                        {expandedSerials[item.id] && item.serials && item.serials.length > 0 && (
-                                          <div className="flex flex-wrap gap-1.5 mt-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditingDateGroup(null)}
+                                            className="px-2 py-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded text-[10px] font-bold uppercase transition-all cursor-pointer"
+                                            title="Cancel"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center justify-between gap-1 group/date">
+                                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 tracking-tight">
+                                          {group.date}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleStartEditDate(group.groupKey, group.firstCreatedAt)}
+                                          className="p-1 rounded text-slate-400 hover:text-[#FE4E02] hover:bg-[#FE4E02]/10 transition-colors cursor-pointer"
+                                          title="Edit Date Received"
+                                        >
+                                          <Pencil size={12} />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+
+                                {/* Item Column */}
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex flex-col gap-1">
+                                    <span className="text-[11px] font-bold text-slate-800 dark:text-white leading-snug">
+                                      {item.name}
+                                    </span>
+                                    {item.serials && item.serials.length > 0 && (
+                                      <div className="flex flex-col gap-1.5 mt-0.5">
+                                        <button 
+                                          type="button"
+                                          onClick={() => toggleSerials(item.id)}
+                                          className="flex items-center gap-1 text-[#FE4E02] text-[9px] font-black uppercase tracking-widest hover:opacity-80 transition-all w-fit cursor-pointer"
+                                        >
+                                          <Hash size={10} />
+                                          {expandedSerials[item.id] ? 'Hide Serials' : `Show Serials (${item.serials.length})`}
+                                        </button>
+                                        {expandedSerials[item.id] && (
+                                          <div className="flex flex-wrap gap-1 mt-1 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
                                             {item.serials.map((sn, snIdx) => (
-                                              <span key={snIdx} className="px-1.5 py-0.5 bg-white dark:bg-slate-800 text-[8px] font-mono font-bold text-slate-500 dark:text-slate-400 rounded border border-slate-100 dark:border-slate-700 shadow-sm">
+                                              <span key={snIdx} className="px-1.5 py-0.5 bg-white dark:bg-slate-900 text-[8.5px] font-mono font-bold text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700 shadow-xs">
                                                 {sn}
                                               </span>
                                             ))}
                                           </div>
                                         )}
                                       </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </td>
-                              <td className="px-4 py-4">
-                                <div className="space-y-3">
-                                    {group.items.map((item, i) => (
-                                      <div key={item.id} className={`text-[11px] font-black text-[#FE4E02] h-full flex flex-col justify-center ${i > 0 ? 'pt-3 border-t border-transparent translate-y-[-1px]' : ''}`}>
-                                        {i > 0 && <div className="border-t border-transparent mb-3" />}
-                                        {item.qty}
-                                      </div>
-                                    ))}
-                                </div>
-                              </td>
-                              <td className="px-4 py-4 text-[11px] font-bold text-slate-600 dark:text-slate-400">
-                                <div className="space-y-3">
-                                    {group.items.map((item, i) => (
-                                      <div key={item.id} className={`flex flex-col justify-center ${i > 0 ? 'pt-3 border-t border-transparent' : ''}`}>
-                                        {i > 0 && <div className="border-t border-transparent mb-3" />}
-                                        {item.received_by}
-                                      </div>
-                                    ))}
-                                </div>
-                              </td>
-                              <td className="px-4 py-4 text-[11px] font-medium text-slate-400 dark:text-slate-500 italic">
-                                <div className="space-y-3">
-                                    {group.items.map((item, i) => (
-                                      <div key={item.id} className={`flex flex-col justify-center ${i > 0 ? 'pt-3 border-t border-transparent' : ''}`}>
-                                        {i > 0 && <div className="border-t border-transparent mb-3" />}
-                                        {item.reason}
-                                      </div>
-                                    ))}
-                                </div>
-                              </td>
-                            </tr>
-                          </React.Fragment>
-                        ))}
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* Qty Column */}
+                                <td className="px-4 py-3 text-center align-middle">
+                                  <span className="inline-flex items-center justify-center font-mono font-black text-xs text-[#FE4E02]">
+                                    {item.qty}
+                                  </span>
+                                </td>
+
+                                {/* Received By Column */}
+                                <td className="px-4 py-3 align-middle text-[11px] font-semibold text-slate-600 dark:text-slate-300 truncate" title={item.received_by}>
+                                  {item.received_by || '------'}
+                                </td>
+
+                                {/* Remarks Column */}
+                                <td className="px-4 py-3 align-middle text-[11px] text-slate-500 dark:text-slate-400 italic">
+                                  {item.reason ? (
+                                    <span className="font-mono text-[10.5px] not-italic text-slate-600 dark:text-slate-400">
+                                      {item.reason}
+                                    </span>
+                                  ) : (
+                                    '------'
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          });
+                        })}
                       </tbody>
                     </table>
                   </div>

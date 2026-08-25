@@ -144,6 +144,11 @@ const ArchivedRequestsList: React.FC<ArchivedRequestsListProps> = ({ isDarkMode 
   const handlePermanentDelete = async () => {
     if (!isSupabaseConfigured || !requestToDelete) return;
     
+    if (requestToDelete.poNumber && requestToDelete.poNumber.trim()) {
+      showError('Delete Blocked', 'Cannot delete request with an assigned Purchase Order. Please delete/unassign the PO first.');
+      return;
+    }
+
     const controlNo = requestToDelete.id;
     setProcessingId(controlNo);
     try {
@@ -414,15 +419,22 @@ const ArchivedRequestsList: React.FC<ArchivedRequestsListProps> = ({ isDarkMode 
                           {isAdmin && (
                             <button
                               onClick={() => {
+                                if (req.poNumber && req.poNumber.trim()) {
+                                  showError('Delete Blocked', 'Cannot delete request with an assigned Purchase Order. Please delete/unassign the PO first.');
+                                  return;
+                                }
                                 setRequestToDelete(req);
                                 setIsDeleteModalOpen(true);
                               }}
+                              disabled={!!(req.poNumber && req.poNumber.trim())}
                               className={`p-2 rounded-xl transition-all shadow-sm ${
-                                isDarkMode 
-                                  ? 'bg-slate-800 text-slate-400 hover:text-red-500 hover:bg-red-500/10' 
-                                  : 'bg-slate-50 text-slate-400 hover:text-red-500 hover:bg-red-50'
+                                (req.poNumber && req.poNumber.trim())
+                                  ? 'opacity-40 cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800 dark:text-slate-600'
+                                  : isDarkMode 
+                                    ? 'bg-slate-800 text-slate-400 hover:text-red-500 hover:bg-red-500/10' 
+                                    : 'bg-slate-50 text-slate-400 hover:text-red-500 hover:bg-red-50'
                               }`}
-                              title="Delete Permanently"
+                              title={(req.poNumber && req.poNumber.trim()) ? "Locked: Cannot delete request with assigned PO. Delete PO first." : "Delete Permanently"}
                             >
                               <Trash2 size={16} />
                             </button>

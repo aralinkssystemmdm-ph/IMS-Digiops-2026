@@ -1056,15 +1056,15 @@ const App: React.FC = () => {
         <Route path="school" element={<Catalog initialTab="school" isDarkMode={isDarkMode} userRole={userRole} currentUsername={currentUser} />} />
         <Route path="location" element={<Catalog initialTab="location" isDarkMode={isDarkMode} userRole={userRole} currentUsername={currentUser} />} />
         <Route path="tracking" element={<Tracking isDarkMode={isDarkMode} />} />
-        <Route path="school-monitoring" element={<SchoolMonitoring isDarkMode={isDarkMode} />} />
-        <Route path="pullout" element={<PulloutManagement isDarkMode={isDarkMode} />} />
+        <Route path="school-monitoring" element={<SchoolMonitoring isDarkMode={isDarkMode} userRole={userRole} />} />
+        <Route path="pullout" element={<PulloutManagement isDarkMode={isDarkMode} userRole={userRole} />} />
         <Route path="pullout/create" element={<CreatePulloutPage isDarkMode={isDarkMode} />} />
         <Route path="pullout/edit/:pulloutId" element={<CreatePulloutPage isDarkMode={isDarkMode} />} />
-        <Route path="delivery-receipt" element={<DeliveryReceiptManagement isDarkMode={isDarkMode} />} />
+        <Route path="delivery-receipt" element={<DeliveryReceiptManagement isDarkMode={isDarkMode} userRole={userRole} />} />
         <Route path="delivery-receipt/create" element={<CreateDeliveryReceiptPage isDarkMode={isDarkMode} />} />
         <Route path="delivery-receipt/edit/:drId" element={<CreateDeliveryReceiptPage isDarkMode={isDarkMode} />} />
-        <Route path="fixed-assets" element={<AcknowledgementReceiptManagement isDarkMode={isDarkMode} />} />
-        <Route path="archived" element={<Archived isDarkMode={isDarkMode} />} />
+        <Route path="fixed-assets" element={<AcknowledgementReceiptManagement isDarkMode={isDarkMode} userRole={userRole} />} />
+        <Route path="archived" element={<Archived isDarkMode={isDarkMode} userRole={userRole} />} />
         <Route path="users" element={<Users isDarkMode={isDarkMode} userRole={userRole} />} />
         <Route path="verified-transfer" element={
           <VerifiedTransferPage 

@@ -162,9 +162,13 @@ const SAMPLE_AR_DATA: AcknowledgementReceipt[] = [
 
 interface AcknowledgementReceiptManagementProps {
   isDarkMode?: boolean;
+  userRole?: string | null;
 }
 
-const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagementProps> = ({ isDarkMode = false }) => {
+const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagementProps> = ({ 
+  isDarkMode = false,
+  userRole = localStorage.getItem('aralinks_role') || 'Staff'
+}) => {
   const { showInfo, showSuccess, showError, showWarning } = useNotification();
   
   // States
@@ -491,19 +495,21 @@ const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagemen
           isDarkMode={isDarkMode}
           actions={
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  setEditingAR(null);
-                  setIsFormModalOpen(true);
-                }}
-                className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90 bg-brand-orange"
-                style={{
-                  boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
-                }}
-              >
-                <Plus size={16} strokeWidth={2.5} />
-                Create Acknowledgement Receipt
-              </button>
+              {userRole !== 'Staff' && (
+                <button
+                  onClick={() => {
+                    setEditingAR(null);
+                    setIsFormModalOpen(true);
+                  }}
+                  className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90 bg-brand-orange"
+                  style={{
+                    boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
+                  }}
+                >
+                  <Plus size={16} strokeWidth={2.5} />
+                  Create Acknowledgement Receipt
+                </button>
+              )}
               <button
                 onClick={handleExportAll}
                 className={`px-4 py-2.5 rounded-xl border font-bold text-xs uppercase tracking-wider transition-all active:scale-95 flex items-center gap-2 cursor-pointer ${
@@ -880,15 +886,19 @@ const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagemen
                         </button>
                         <button
                           onClick={() => {
+                            if (userRole === 'Staff') return;
                             setEditingAR(ar);
                             setIsFormModalOpen(true);
                           }}
-                          className={`p-2 rounded-lg border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-                            isDarkMode 
-                              ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-blue-400 hover:bg-slate-850' 
-                              : 'bg-white border-slate-100 text-slate-600 hover:text-blue-500 hover:bg-slate-50'
+                          disabled={userRole === 'Staff'}
+                          className={`p-2 rounded-lg border transition-all ${
+                            userRole === 'Staff'
+                              ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                              : isDarkMode 
+                                ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-blue-400 hover:bg-slate-850 hover:scale-105 cursor-pointer' 
+                                : 'bg-white border-slate-100 text-slate-600 hover:text-blue-500 hover:bg-slate-50 hover:scale-105 cursor-pointer'
                           }`}
-                          title="Edit Document"
+                          title={userRole === 'Staff' ? "Action disabled for Staff role" : "Edit Document"}
                         >
                           <Notebook size={14} />
                         </button>
@@ -897,7 +907,7 @@ const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagemen
                           className={`p-2 rounded-lg border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
                             isDarkMode 
                               ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-purple-400 hover:bg-slate-850' 
-                              : 'bg-white border-slate-100 text-slate-600 hover:text-purple-500 hover:bg-slate-50'
+                               : 'bg-white border-slate-100 text-slate-600 hover:text-purple-500 hover:bg-slate-50'
                           }`}
                           title="Print Document"
                         >
@@ -914,17 +924,19 @@ const AcknowledgementReceiptManagement: React.FC<AcknowledgementReceiptManagemen
                         >
                           <Download size={14} />
                         </button>
-                        <button
-                          onClick={() => setShowDeleteConfirm(ar.id)}
-                          className={`p-2 rounded-lg border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
-                            isDarkMode 
-                              ? 'bg-slate-950 border-slate-800 text-rose-400 hover:bg-rose-500/10' 
-                              : 'bg-white border-slate-100 text-rose-550 hover:bg-rose-50'
-                          }`}
-                          title="Delete AR Record"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        {userRole !== 'Staff' && (
+                          <button
+                            onClick={() => setShowDeleteConfirm(ar.id)}
+                            className={`p-2 rounded-lg border transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                              isDarkMode 
+                                ? 'bg-slate-950 border-slate-800 text-rose-400 hover:bg-rose-500/10' 
+                                : 'bg-white border-slate-100 text-rose-550 hover:bg-rose-50'
+                            }`}
+                            title="Delete AR Record"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
                     </td>
 

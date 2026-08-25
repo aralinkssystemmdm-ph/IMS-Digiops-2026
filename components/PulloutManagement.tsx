@@ -22,7 +22,8 @@ import {
   RefreshCw,
   Notebook,
   Printer,
-  PenTool
+  PenTool,
+  FileDown
 } from 'lucide-react';
 import { toTitleCase } from '../lib/utils';
 import PageHeader from './PageHeader';
@@ -114,9 +115,13 @@ const SAMPLE_PULLOUT_DATA: PulloutRequest[] = [
 
 interface PulloutManagementProps {
   isDarkMode?: boolean;
+  userRole?: string | null;
 }
 
-const PulloutManagement: React.FC<PulloutManagementProps> = ({ isDarkMode = false }) => {
+const PulloutManagement: React.FC<PulloutManagementProps> = ({ 
+  isDarkMode = false,
+  userRole = localStorage.getItem('aralinks_role') || 'Staff'
+}) => {
   const navigate = useNavigate();
   const { showInfo, showSuccess } = useNotification();
   const [searchQuery, setSearchQuery] = useState('');
@@ -266,6 +271,32 @@ const PulloutManagement: React.FC<PulloutManagementProps> = ({ isDarkMode = fals
     window.print();
   };
 
+  const handleExportCSV = () => {
+    try {
+      const headers = ['Pullout No.', 'School Name', 'Date', 'Status', 'Total Items', 'Initiated By', 'Remarks'];
+      const rows = filteredData.map(p => [
+        `"${p.id}"`,
+        `"${p.schoolName.replace(/"/g, '""')}"`,
+        `"${p.date}"`,
+        `"${p.status}"`,
+        p.totalItems,
+        `"${(p.initiatedBy || '').replace(/"/g, '""')}"`,
+        `"${(p.remarks || '').replace(/"/g, '""')}"`
+      ]);
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `pullout_requests_${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      showSuccess('Export Successful', 'Pullout requests data exported to CSV format.');
+    } catch (e) {
+      console.error('Error exporting pullouts:', e);
+    }
+  };
+
   return (
     <div className="w-full h-full overflow-y-auto pr-2 animate-in fade-in duration-500 relative no-scrollbar">
       {/* Dynamic Header */}
@@ -275,17 +306,33 @@ const PulloutManagement: React.FC<PulloutManagementProps> = ({ isDarkMode = fals
           description="Manage equipment and asset pullout requests" 
           isDarkMode={isDarkMode}
           actions={
-            <button
-              onClick={handleCreatePullout}
-              className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
-              style={{
-                backgroundColor: 'var(--brand-accent)',
-                boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
-              }}
-            >
-              <Plus size={16} strokeWidth={2.5} />
-              Create Pullout
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleExportCSV}
+                className={`px-4 py-2.5 rounded-xl border text-[10px] font-black tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                  isDarkMode 
+                    ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800' 
+                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <FileDown size={14} />
+                Export
+              </button>
+
+              {userRole !== 'Staff' && (
+                <button
+                  onClick={handleCreatePullout}
+                  className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
+                  style={{
+                    backgroundColor: 'var(--brand-accent)',
+                    boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
+                  }}
+                >
+                  <Plus size={16} strokeWidth={2.5} />
+                  Create Pullout
+                </button>
+              )}
+            </div>
           }
         />
       </div>
@@ -437,13 +484,19 @@ const PulloutManagement: React.FC<PulloutManagementProps> = ({ isDarkMode = fals
                           <Eye size={15} />
                         </button>
                         <button
-                          onClick={() => navigate(`/pullout/edit/${pullout.id}`)}
-                          className={`p-2 rounded-lg border transition-all hover:scale-110 cursor-pointer ${
-                            isDarkMode 
-                              ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-blue-400 hover:bg-slate-800' 
-                              : 'bg-white border-slate-100 text-slate-600 hover:text-blue-500 hover:bg-slate-50'
+                          onClick={() => {
+                            if (userRole === 'Staff') return;
+                            navigate(`/pullout/edit/${pullout.id}`);
+                          }}
+                          disabled={userRole === 'Staff'}
+                          className={`p-2 rounded-lg border transition-all ${
+                            userRole === 'Staff'
+                              ? 'opacity-40 cursor-not-allowed text-slate-400 border-slate-200 dark:border-slate-800'
+                              : isDarkMode 
+                                ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-blue-400 hover:bg-slate-800 hover:scale-110 cursor-pointer' 
+                                : 'bg-white border-slate-100 text-slate-600 hover:text-blue-500 hover:bg-slate-50 hover:scale-110 cursor-pointer'
                           }`}
-                          title="Edit Pullout Request"
+                          title={userRole === 'Staff' ? "Action disabled for Staff role" : "Edit Pullout Request"}
                         >
                           <Notebook size={15} />
                         </button>

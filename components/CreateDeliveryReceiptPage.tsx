@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { syncSchoolMonitoringWithDRs } from './monitoringSync';
 import { 
   ArrowLeft, 
+  ArrowRight,
   Save, 
   Trash2, 
   Plus, 
@@ -16,6 +17,7 @@ import {
   Check, 
   ChevronDown, 
   AlertCircle, 
+  AlertTriangle,
   Eye, 
   Info, 
   Fingerprint, 
@@ -27,7 +29,12 @@ import {
   Loader2,
   FileCheck,
   ListPlus,
-  Compass
+  Compass,
+  Upload,
+  Image,
+  FileUp,
+  RefreshCw,
+  Edit3
 } from 'lucide-react';
 import { useNotification } from './NotificationProvider';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -45,7 +52,135 @@ interface DRHardwareItem {
   remarks: string;
   item_code?: string;
   deduct_location?: string;
+  bundle_name?: string;
+  bundle?: string;
 }
+
+export interface ACEPrintPage {
+  pageNumber: number;
+  totalPages: number;
+  groupKey: 'arduino' | 'raspberry' | 'toolkit_group' | 'other';
+  groupLabel: string;
+  badgeColor: string;
+  items: DRHardwareItem[];
+}
+
+export const getAcePrintPages = (items: DRHardwareItem[]): ACEPrintPage[] => {
+  if (!items || items.length === 0) {
+    return [{
+      pageNumber: 1,
+      totalPages: 1,
+      groupKey: 'other',
+      groupLabel: 'HARDWARE',
+      badgeColor: '#ea580c',
+      items: []
+    }];
+  }
+
+  // Helper to categorize single item into ACE bundles
+  const classifyItem = (hw: DRHardwareItem): 'arduino' | 'raspberry' | 'toolkit_group' | 'other' => {
+    const r = (hw.remarks || '').toUpperCase();
+    const b = (hw.bundle_name || hw.bundle || '').toUpperCase();
+    const d = (hw.description || '').toUpperCase();
+    const text = `${b} ${r} ${d}`;
+
+    if (text.includes('ARDUINO')) return 'arduino';
+    if (text.includes('RASPBERRY')) return 'raspberry';
+    if (
+      text.includes('LITTLE BITS') ||
+      text.includes('LITTLEBITS') ||
+      text.includes('MICRO:BIT') ||
+      text.includes('MICROBIT') ||
+      text.includes('MICRO BIT') ||
+      text.includes('MAKEY-MAKEY') ||
+      text.includes('MAKEY MAKEY') ||
+      text.includes('MAKEYMAKEY') ||
+      text.includes('AF TOOLS') ||
+      text.includes('AF-TOOLS') ||
+      text.includes('A&F TOOLS')
+    ) {
+      return 'toolkit_group';
+    }
+    return 'other';
+  };
+
+  const classified = items.map(it => ({ item: it, cat: classifyItem(it) }));
+  const hasAceBundles = classified.some(c => c.cat !== 'other');
+
+  // If there are no ACE bundles at all, return all items on a single page
+  if (!hasAceBundles) {
+    return [{
+      pageNumber: 1,
+      totalPages: 1,
+      groupKey: 'other',
+      groupLabel: 'HARDWARE',
+      badgeColor: '#ea580c',
+      items: items
+    }];
+  }
+
+  const arduinoItems: DRHardwareItem[] = [];
+  const raspberryItems: DRHardwareItem[] = [];
+  const toolkitGroupItems: DRHardwareItem[] = [];
+  const otherItems: DRHardwareItem[] = [];
+
+  classified.forEach(({ item, cat }) => {
+    if (cat === 'arduino') arduinoItems.push(item);
+    else if (cat === 'raspberry') raspberryItems.push(item);
+    else if (cat === 'toolkit_group') toolkitGroupItems.push(item);
+    else otherItems.push(item);
+  });
+
+  const rawPages: {
+    groupKey: 'arduino' | 'raspberry' | 'toolkit_group' | 'other';
+    groupLabel: string;
+    badgeColor: string;
+    items: DRHardwareItem[];
+  }[] = [];
+
+  if (otherItems.length > 0) {
+    rawPages.push({
+      groupKey: 'other',
+      groupLabel: 'HARDWARE - GENERAL / NON-BUNDLE',
+      badgeColor: '#64748b',
+      items: otherItems
+    });
+  }
+
+  if (arduinoItems.length > 0) {
+    rawPages.push({
+      groupKey: 'arduino',
+      groupLabel: 'HARDWARE - ARDUINO BUNDLE',
+      badgeColor: '#8b5cf6',
+      items: arduinoItems
+    });
+  }
+
+  if (raspberryItems.length > 0) {
+    rawPages.push({
+      groupKey: 'raspberry',
+      groupLabel: 'HARDWARE - RASPBERRY BUNDLE',
+      badgeColor: '#ec4899',
+      items: raspberryItems
+    });
+  }
+
+  if (toolkitGroupItems.length > 0) {
+    rawPages.push({
+      groupKey: 'toolkit_group',
+      groupLabel: 'HARDWARE - LITTLE BITS, MICRO:BIT, MAKEY-MAKEY & AF TOOLS',
+      badgeColor: '#10b981',
+      items: toolkitGroupItems
+    });
+  }
+
+  const total = rawPages.length || 1;
+  return rawPages.map((p, idx) => ({
+    ...p,
+    pageNumber: idx + 1,
+    totalPages: total
+  }));
+};
 
 interface DRServiceItem {
   id: string;
@@ -135,11 +270,12 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
   const [hardwareItems, setHardwareItems] = useState<DRHardwareItem[]>([]);
   const [serviceItems, setServiceItems] = useState<DRServiceItem[]>([]);
 
-  // Signatories
-  const [signatoryPrepared, setSignatoryPrepared] = useState<DRSignatory>({ name: 'Sarah Connor', date: '', type: 'typed' });
+  // Signatories (Default values: Prepared by = Bianca Aguinaldo, Approved by = Jerald Dela Cruz, Delivered = blank, fully editable)
+  const [signatoryPrepared, setSignatoryPrepared] = useState<DRSignatory>({ name: 'Bianca Aguinaldo', date: '', type: 'typed' });
   const [signatoryApproved, setSignatoryApproved] = useState<DRSignatory>({ name: 'Jerald Dela Cruz', date: '', type: 'typed' });
-  const [signatoryDelivered, setSignatoryDelivered] = useState<DRSignatory>({ name: 'John Robert Pagala', date: '', type: 'typed' });
+  const [signatoryDelivered, setSignatoryDelivered] = useState<DRSignatory>({ name: '', date: '', type: 'typed' });
   const [signatoryCheckedReceived, setSignatoryCheckedReceived] = useState<DRSignatory>({ name: '', date: '', type: 'pending' });
+  const [previewActivePageTab, setPreviewActivePageTab] = useState<number | 'all'>('all');
 
   // Autocomplete UI controllers
   const [schoolType, setSchoolType] = useState<'new' | 'existing'>('new');
@@ -238,15 +374,19 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
   const [globalAvailableSerials, setGlobalAvailableSerials] = useState<{ serial_number: string; item_code: string; location: string; condition: string }[]>([]);
   const [loadingGlobalSerials, setLoadingGlobalSerials] = useState(false);
 
-  // Signatory Scribbling Overlay state
+  // Step Workflow Navigation: Step 1 (Edit Form Details) -> Step 2 (Print Preview & Sign before Save & Publish)
+  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
+
+  // Signatory Scribbling & E-Signature Overlay state
   const [drawingSignatoryKey, setDrawingSignatoryKey] = useState<'prepared' | 'approved' | 'delivered' | 'checkedReceived' | null>(null);
   const [isSignModalOpen, setIsSignModalOpen] = useState(false);
+  const [sigModalTab, setSigModalTab] = useState<'upload' | 'draw' | 'type'>('upload');
+  const [uploadedSigPreview, setUploadedSigPreview] = useState<string | null>(null);
   const [typedSignName, setTypedSignName] = useState('');
+  const [typedSignDate, setTypedSignDate] = useState('');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isScribbling, setIsScribbling] = useState(false);
-
-  // Print Mode State
-  const [isPrintPreviewActive, setIsPrintPreviewActive] = useState(false);
+  const sigFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Bundle and equipment list states for dynamic bundle loading
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
@@ -995,7 +1135,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     }
   };
 
-  // Canvas drawing signatories controllers
+  // Canvas & E-Signature drawing/upload signatories controllers
   const openSignatureModal = (key: 'prepared' | 'approved' | 'delivered' | 'checkedReceived') => {
     setDrawingSignatoryKey(key);
     let currentSignatory: DRSignatory;
@@ -1004,7 +1144,10 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     else if (key === 'delivered') currentSignatory = signatoryDelivered;
     else currentSignatory = signatoryCheckedReceived;
 
-    setTypedSignName(currentSignatory.name);
+    setTypedSignName(currentSignatory.name || '');
+    setTypedSignDate(currentSignatory.date || dateOfAcceptance || new Date().toISOString().substring(0, 10));
+    setUploadedSigPreview(currentSignatory.signatureImage || null);
+    setSigModalTab(currentSignatory.signatureImage ? 'upload' : 'upload');
     setIsSignModalOpen(true);
 
     // Give time for layout rendering and establish strokes
@@ -1078,7 +1221,60 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
-  const saveSignatureDetails = (method: 'drawn' | 'typed') => {
+  // Handle direct file upload for e-signatures
+  const handleSignatureFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showError('Invalid Format', 'Please upload a valid image file (PNG, JPG, SVG, WEBP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const result = loadEvent.target?.result as string;
+      setUploadedSigPreview(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDirectSignatureUpload = (key: 'prepared' | 'approved' | 'delivered' | 'checkedReceived', file: File) => {
+    if (!file.type.startsWith('image/')) {
+      showError('Invalid Format', 'Please select a valid image file (PNG, JPG, SVG, WEBP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      const result = loadEvent.target?.result as string;
+      const updateFn = key === 'prepared' ? setSignatoryPrepared
+        : key === 'approved' ? setSignatoryApproved
+        : key === 'delivered' ? setSignatoryDelivered
+        : setSignatoryCheckedReceived;
+      
+      updateFn(prev => ({
+        ...prev,
+        signatureImage: result,
+        type: 'drawn'
+      }));
+      showSuccess('Signature Uploaded', 'E-signature image attached successfully.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearSignatureData = (key: 'prepared' | 'approved' | 'delivered' | 'checkedReceived') => {
+    const updateFn = key === 'prepared' ? setSignatoryPrepared
+      : key === 'approved' ? setSignatoryApproved
+      : key === 'delivered' ? setSignatoryDelivered
+      : setSignatoryCheckedReceived;
+    
+    updateFn(prev => ({
+      ...prev,
+      signatureImage: undefined,
+      type: 'typed'
+    }));
+    showSuccess('Signature Cleared', 'E-signature image has been removed.');
+  };
+
+  const saveSignatureDetails = (method: 'drawn' | 'typed' | 'uploaded') => {
     if (!drawingSignatoryKey) return;
     let dataUrlImage: string | undefined = undefined;
 
@@ -1087,13 +1283,15 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       if (canvas) {
         dataUrlImage = canvas.toDataURL('image/png');
       }
+    } else if (method === 'uploaded') {
+      dataUrlImage = uploadedSigPreview || undefined;
     }
 
     const sigUpdate: DRSignatory = {
-      name: typedSignName || 'Authorized Officer',
-      date: new Date().toISOString().substring(0, 10),
+      name: typedSignName,
+      date: typedSignDate || new Date().toISOString().substring(0, 10),
       signatureImage: dataUrlImage,
-      type: method
+      type: method === 'typed' ? 'typed' : 'drawn'
     };
 
     if (drawingSignatoryKey === 'prepared') setSignatoryPrepared(sigUpdate);
@@ -1103,7 +1301,143 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
 
     setIsSignModalOpen(false);
     setDrawingSignatoryKey(null);
-    showSuccess('Signature Captured', 'The document has been digitally certified successfully.');
+    setUploadedSigPreview(null);
+    showSuccess('Signature Saved', 'Signatory information updated successfully.');
+  };
+
+  // Section 2 Stock and Catalog validation status
+  const section2Validation = useMemo(() => {
+    if (hardwareItems.length === 0) {
+      return {
+        isValid: false,
+        reason: 'Please add at least one hardware item.',
+        insufficientCount: 0,
+        notFoundCount: 0,
+        missingSerialsCount: 0,
+        invalidRows: [] as { rowId: string; description: string; issue: string }[]
+      };
+    }
+
+    const invalidRows: { rowId: string; description: string; issue: string }[] = [];
+    let insufficientCount = 0;
+    let notFoundCount = 0;
+    let missingSerialsCount = 0;
+
+    hardwareItems.forEach((row, idx) => {
+      const desc = (row.description || '').trim();
+      if (!desc) {
+        invalidRows.push({ rowId: row.id, description: `Hardware Row #${idx + 1}`, issue: 'Empty item description' });
+        notFoundCount++;
+        return;
+      }
+
+      let itemCode = row.item_code;
+      let matchedInv = itemCode ? resolvedInventoryItems.find(it => it.item_code === itemCode) : null;
+      if (!matchedInv) {
+        matchedInv = resolvedInventoryItems.find(it => 
+          (it.item_name || '').toLowerCase().trim() === desc.toLowerCase() ||
+          (it.item_code || '').toLowerCase().trim() === desc.toLowerCase()
+        ) || null;
+        if (matchedInv) itemCode = matchedInv.item_code;
+      }
+
+      if (!matchedInv && !itemCode) {
+        invalidRows.push({ rowId: row.id, description: desc, issue: 'Item not found in inventory catalog' });
+        notFoundCount++;
+        return;
+      }
+
+      let availableStock = 0;
+      let stockLocationName = 'Total active inventory';
+
+      if (row.deduct_location) {
+        const matchedLocStock = locationStocksList.find(l => l.item_code === itemCode && l.location === row.deduct_location);
+        availableStock = matchedLocStock ? Number(matchedLocStock.quantity || 0) : 0;
+        stockLocationName = `Location "${row.deduct_location}"`;
+      } else if (matchedInv) {
+        availableStock = Number(matchedInv.total_quantity ?? (matchedInv as any).quantity ?? 0);
+      }
+
+      const reqQty = Number(row.qty || 1);
+      if (availableStock < reqQty) {
+        invalidRows.push({
+          rowId: row.id,
+          description: desc,
+          issue: `Insufficient stock in ${stockLocationName} (Available: ${availableStock}, Requested: ${reqQty})`
+        });
+        insufficientCount++;
+        return;
+      }
+
+      if (itemCode && isSerializedItem(itemCode, desc)) {
+        const sns = row.specifications
+          ? row.specifications.split(',').map(s => s.trim()).filter(Boolean)
+          : [];
+        if (sns.length === 0) {
+          invalidRows.push({
+            rowId: row.id,
+            description: desc,
+            issue: `Serial numbers missing (Select ${reqQty} serial numbers)`
+          });
+          missingSerialsCount++;
+        } else if (sns.length !== reqQty) {
+          invalidRows.push({
+            rowId: row.id,
+            description: desc,
+            issue: `Serial count mismatch (Selected ${sns.length} of ${reqQty} required serials)`
+          });
+          missingSerialsCount++;
+        }
+      }
+    });
+
+    return {
+      isValid: invalidRows.length === 0,
+      reason: invalidRows.length > 0 ? invalidRows[0].issue : '',
+      insufficientCount,
+      notFoundCount,
+      missingSerialsCount,
+      invalidRows
+    };
+  }, [hardwareItems, resolvedInventoryItems, locationStocksList]);
+
+  // Step transition helper with strict stock & catalog validation
+  const handleProceedToPreview = () => {
+    if (!deliveredTo.trim()) {
+      showError('Validation Required', 'Please search and select or input a School Client name before proceeding to preview.');
+      return;
+    }
+    if (hardwareItems.length === 0) {
+      showError('Validation Required', 'Please add at least one Hardware unit item before proceeding to preview.');
+      return;
+    }
+
+    if (!section2Validation.isValid) {
+      const firstIssue = section2Validation.invalidRows[0];
+      if (section2Validation.insufficientCount > 0) {
+        showError(
+          'Insufficient Stock Detected',
+          `Cannot proceed to Step 2: "${firstIssue.description}" has insufficient inventory stock (${firstIssue.issue}). Please adjust quantity or select available stock.`
+        );
+      } else if (section2Validation.notFoundCount > 0) {
+        showError(
+          'Item Not Found in Catalog',
+          `Cannot proceed to Step 2: "${firstIssue.description}" was not found in the active inventory catalog. Please choose a valid item from inventory.`
+        );
+      } else if (section2Validation.missingSerialsCount > 0) {
+        showError(
+          'Serial Numbers Incomplete',
+          `Cannot proceed to Step 2: "${firstIssue.description}" has incomplete serial numbers (${firstIssue.issue}).`
+        );
+      } else {
+        showError('Validation Failed', `Cannot proceed to Step 2: ${section2Validation.reason}`);
+      }
+      return;
+    }
+
+    setCurrentStep(2);
+    setPreviewActivePageTab('all');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Submit and save handler
@@ -1206,8 +1540,8 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
         inTransitDate: statusLower === 'in transit' || statusLower === 'delivered' ? inTransitDate : undefined,
         deliveredDate: statusLower === 'delivered' ? deliveredDate : undefined,
         totalItems: computedTotalItems,
-        issuedBy: signatoryPrepared.name || 'Sarah Connor',
-        deliveredBy: signatoryDelivered.name || 'Courier Cargo',
+        issuedBy: signatoryPrepared.name || '',
+        deliveredBy: signatoryDelivered.name || '',
         receivedBy: signatoryCheckedReceived.name || '',
         remarks: remarks || '',
         // Full local metadata
@@ -1249,8 +1583,8 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             in_transit_date: statusLower === 'in transit' || statusLower === 'delivered' ? inTransitDate : null,
             delivered_date: statusLower === 'delivered' ? deliveredDate : null,
             total_items: computedTotalItems,
-            issued_by: signatoryPrepared.name || 'Sarah Connor',
-            delivered_by: signatoryDelivered.name || 'Courier Cargo',
+            issued_by: signatoryPrepared.name || '',
+            delivered_by: signatoryDelivered.name || '',
             received_by: signatoryCheckedReceived.name || '',
             remarks: remarks || '',
             hardware_items: hardwareItems,
@@ -1435,61 +1769,138 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
   return (
     <div className={`w-full h-full p-4 lg:p-6 overflow-y-auto no-scrollbar font-sans ${isDarkMode ? 'text-slate-100 bg-slate-950' : 'text-slate-800 bg-slate-50'}`}>
       
-      {/* HEADER CONTROLS */}
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-4 print:hidden">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/delivery-receipt')}
-            className={`p-2.5 rounded-xl border transition-all hover:scale-105 cursor-pointer ${
-              isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white' : 'bg-white border-slate-200 text-slate-500 hover:text-slate-800'
-            }`}
-            title="Go Back"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="p-1 px-2.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-brand-orange/10 text-brand-orange border border-brand-orange/20">
-                {isEditMode ? 'Modify Mode' : 'New Form Draft'}
-              </span>
+      {/* HEADER CONTROLS & 2-STEP WORKFLOW */}
+      <div className="flex flex-col gap-4 mb-6 print:hidden">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                if (currentStep === 2) {
+                  setCurrentStep(1);
+                } else {
+                  navigate('/delivery-receipt');
+                }
+              }}
+              className={`p-2.5 rounded-xl border transition-all hover:scale-105 cursor-pointer ${
+                isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white' : 'bg-white border-slate-200 text-slate-500 hover:text-slate-800'
+              }`}
+              title={currentStep === 2 ? "Back to Step 1 Form" : "Go Back"}
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="p-1 px-2.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-brand-orange/10 text-brand-orange border border-brand-orange/20">
+                  {isEditMode ? 'Modify Mode' : 'New Form Draft'}
+                </span>
+                <span className={`p-1 px-2.5 rounded-full text-[9px] font-black uppercase tracking-wider border ${
+                  currentStep === 1 
+                    ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20' 
+                    : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                }`}>
+                  {currentStep === 1 ? 'Step 1: Edit Form' : 'Step 2: Print Preview & Sign'}
+                </span>
+              </div>
+              <h1 className="text-xl font-black mt-1 leading-tight tracking-tight">
+                {currentStep === 1 
+                  ? (isEditMode ? `Edit Delivery Acceptance: ${drNo}` : 'Create Delivery Acceptance Form')
+                  : `Print Preview & Authorize: ${drNo}`
+                }
+              </h1>
             </div>
-            <h1 className="text-xl font-black mt-1 leading-tight tracking-tight">
-              {isEditMode ? `Edit Delivery Acceptance: ${drNo}` : 'Create Delivery Acceptance Form'}
-            </h1>
+          </div>
+
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {currentStep === 1 ? (
+              <button
+                type="button"
+                onClick={handleProceedToPreview}
+                className="px-5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest text-white shadow-md active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90 bg-brand-orange"
+              >
+                <span>Proceed to Step 2: Print Preview</span>
+                <ArrowRight size={14} strokeWidth={2.5} />
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setCurrentStep(1)}
+                  className={`px-4 py-2.5 rounded-xl border text-[10px] font-black tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer shadow-xs ${
+                    isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <ArrowLeft size={14} />
+                  <span>Back to Edit Form</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className={`px-4 py-2.5 rounded-xl border text-[10px] font-black tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer shadow-xs ${
+                    isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Printer size={14} />
+                  <span>Print Document</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveDeliveryReceipt}
+                  className="px-5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest text-white shadow-md active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
+                  style={{ backgroundColor: 'var(--brand-accent)' }}
+                >
+                  <Save size={14} strokeWidth={2.5} />
+                  <span>{isEditMode ? 'Update Record' : 'Save & Publish'}</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Print preview toggle */}
+        {/* STEPPER PROGRESS BAR */}
+        <div className={`p-2 rounded-2xl border flex items-center gap-2 ${isDarkMode ? 'bg-slate-900/60 border-slate-800/80' : 'bg-white border-slate-200 shadow-xs'}`}>
           <button
-            onClick={() => setIsPrintPreviewActive(!isPrintPreviewActive)}
-            className={`px-4 py-2.5 rounded-xl border text-[10px] font-black tracking-widest uppercase transition-all flex items-center gap-2 cursor-pointer shadow-xs ${
-              isPrintPreviewActive
-                ? 'bg-brand-orange border-brand-orange text-white'
-                : isDarkMode ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800' : 'bg-white border-slate-200 text-slate-705 hover:bg-slate-50'
+            type="button"
+            onClick={() => setCurrentStep(1)}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              currentStep === 1 
+                ? 'bg-brand-orange text-white shadow-xs' 
+                : isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <Eye size={14} />
-            {isPrintPreviewActive ? 'Edit Interactive mode' : 'Form Print Preview'}
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+              currentStep === 1 ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+            }`}>
+              1
+            </span>
+            <span>Step 1: Fill Form Details & Items</span>
+            {currentStep === 2 && <CheckCircle2 size={14} className="text-emerald-500 ml-1" />}
           </button>
 
-
-
           <button
-            onClick={handleSaveDeliveryReceipt}
-            className="px-5 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-widest text-white shadow-md active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
-            style={{ backgroundColor: 'var(--brand-accent)' }}
+            type="button"
+            onClick={handleProceedToPreview}
+            className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              currentStep === 2 
+                ? 'bg-brand-orange text-white shadow-xs' 
+                : isDarkMode ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
           >
-            <Save size={14} strokeWidth={2.5} />
-            {isEditMode ? 'Update Record' : 'Save & Publish'}
+            <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
+              currentStep === 2 ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+            }`}>
+              2
+            </span>
+            <span>Step 2: Print Preview & Digital Signatures (Save & Publish)</span>
           </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* INTERACTIVE FORM SECTION */}
-        <div className={`lg:col-span-12 space-y-6 ${isPrintPreviewActive ? 'hidden' : 'block'} print:hidden`}>
+        {/* STEP 1: INTERACTIVE FORM SECTION */}
+        <div className={`lg:col-span-12 space-y-6 ${currentStep === 1 ? 'block' : 'hidden'} print:hidden`}>
           
           {/* SECTION 1: CORE CLIENT & METADATA */}
           <div className={`p-4 rounded-xl border shadow-xs space-y-3.5 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-150'}`}>
@@ -1781,6 +2192,18 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
               <div className="flex items-center gap-2">
                 <ListPlus size={16} className="text-brand-orange" />
                 <h2 className="text-xs font-black uppercase tracking-widest text-slate-400">Section 2: Hardware Delivered Items</h2>
+                {!section2Validation.isValid && hardwareItems.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-500/10 text-rose-500 border border-rose-500/20 flex items-center gap-1">
+                    <AlertTriangle size={10} />
+                    {section2Validation.insufficientCount > 0 ? 'Insufficient Stock' : section2Validation.notFoundCount > 0 ? 'Item Not In Inventory' : 'Serials Missing'}
+                  </span>
+                )}
+                {section2Validation.isValid && hardwareItems.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center gap-1">
+                    <CheckCircle2 size={10} />
+                    Stock Ready
+                  </span>
+                )}
               </div>
               <div className="flex gap-1.5 items-center relative">
                 {schoolType === 'existing' && (
@@ -2460,9 +2883,301 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             )}
           </div>
 
-          {/* GENERAL REMARKS */}
+          {/* SECTION 3: SIGNATORIES & AUTHORIZATIONS (Default Blank Names, Editable & E-Signature Upload Support) */}
+          <div className={`p-4 rounded-xl border shadow-xs space-y-4 text-left ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-150'}`}>
+            <div className="flex items-center justify-between border-b dark:border-slate-800 pb-2">
+              <div className="flex items-center gap-2">
+                <PenTool size={16} className="text-brand-orange" />
+                <h3 className="text-xs font-black uppercase tracking-wider">
+                  Section 3: Document Signatories & E-Signatures
+                </h3>
+              </div>
+              <span className="text-[10px] text-slate-400 italic">
+                Blank by default • Editable names & dates • Upload or draw signatures
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              
+              {/* Signatory 1: Prepared by */}
+              <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-black uppercase text-slate-500">Prepared by / Date</span>
+                    {signatoryPrepared.signatureImage && (
+                      <span className="text-[9px] font-bold text-emerald-500 flex items-center gap-0.5">
+                        <CheckCircle2 size={11} /> Signed
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Signatory Name</label>
+                      <input
+                        type="text"
+                        placeholder="Bianca Aguinaldo"
+                        value={signatoryPrepared.name}
+                        onChange={(e) => setSignatoryPrepared(prev => ({ ...prev, name: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Date</label>
+                      <input
+                        type="date"
+                        value={signatoryPrepared.date || dateOfAcceptance}
+                        onChange={(e) => setSignatoryPrepared(prev => ({ ...prev, date: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* E-Signature Area */}
+                <div className="pt-2 border-t border-dashed dark:border-slate-800">
+                  <div className="h-16 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 flex items-center justify-center relative overflow-hidden mb-2">
+                    {signatoryPrepared.signatureImage ? (
+                      <img src={signatoryPrepared.signatureImage} alt="Prepared Sig" className="object-contain h-full w-full p-1" />
+                    ) : (
+                      <span className="text-[9px] text-slate-400 italic">No e-signature attached</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1">
+                      <Upload size={10} />
+                      <span>Upload</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleDirectSignatureUpload('prepared', file);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => openSignatureModal('prepared')}
+                      className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-brand-orange/10 border-brand-orange/30 text-brand-orange hover:bg-brand-orange/20 cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <PenTool size={10} />
+                      <span>Draw</span>
+                    </button>
+                    {signatoryPrepared.signatureImage && (
+                      <button
+                        type="button"
+                        onClick={() => clearSignatureData('prepared')}
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 cursor-pointer"
+                        title="Remove Signature"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatory 2: Delivered / Installed by (Full Name only - no date, no e-signature) */}
+              <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-black uppercase text-slate-500">Delivered / Installed by</span>
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Signatory Full Name</label>
+                      <input
+                        type="text"
+                        placeholder="Enter Delivered / Installed full name..."
+                        value={signatoryDelivered.name}
+                        onChange={(e) => setSignatoryDelivered(prev => ({ ...prev, name: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                      <p className="text-[9.5px] text-slate-400 mt-1 italic">Full name only (no date & no e-signature required)</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatory 3: Approved by */}
+              <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-black uppercase text-slate-500">Approved by / Date</span>
+                    {signatoryApproved.signatureImage && (
+                      <span className="text-[9px] font-bold text-emerald-500 flex items-center gap-0.5">
+                        <CheckCircle2 size={11} /> Signed
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Signatory Name</label>
+                      <input
+                        type="text"
+                        placeholder="Jerald Dela Cruz"
+                        value={signatoryApproved.name}
+                        onChange={(e) => setSignatoryApproved(prev => ({ ...prev, name: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Date</label>
+                      <input
+                        type="date"
+                        value={signatoryApproved.date || dateOfAcceptance}
+                        onChange={(e) => setSignatoryApproved(prev => ({ ...prev, date: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* E-Signature Area */}
+                <div className="pt-2 border-t border-dashed dark:border-slate-800">
+                  <div className="h-16 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 flex items-center justify-center relative overflow-hidden mb-2">
+                    {signatoryApproved.signatureImage ? (
+                      <img src={signatoryApproved.signatureImage} alt="Approved Sig" className="object-contain h-full w-full p-1" />
+                    ) : (
+                      <span className="text-[9px] text-slate-400 italic">No e-signature attached</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1">
+                      <Upload size={10} />
+                      <span>Upload</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleDirectSignatureUpload('approved', file);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => openSignatureModal('approved')}
+                      className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-brand-orange/10 border-brand-orange/30 text-brand-orange hover:bg-brand-orange/20 cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <PenTool size={10} />
+                      <span>Draw</span>
+                    </button>
+                    {signatoryApproved.signatureImage && (
+                      <button
+                        type="button"
+                        onClick={() => clearSignatureData('approved')}
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 cursor-pointer"
+                        title="Remove Signature"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatory 4: Checked & Received by */}
+              <div className={`p-3 rounded-xl border flex flex-col justify-between gap-2.5 ${isDarkMode ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-black uppercase text-slate-500">Checked & Received by / Date</span>
+                    {signatoryCheckedReceived.signatureImage && (
+                      <span className="text-[9px] font-bold text-emerald-500 flex items-center gap-0.5">
+                        <CheckCircle2 size={11} /> Signed
+                      </span>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Signatory Name</label>
+                      <input
+                        type="text"
+                        placeholder="Enter Receiver name..."
+                        value={signatoryCheckedReceived.name}
+                        onChange={(e) => setSignatoryCheckedReceived(prev => ({ ...prev, name: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs font-bold focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-slate-400 uppercase block mb-1">Date</label>
+                      <input
+                        type="date"
+                        value={signatoryCheckedReceived.date || dateOfAcceptance}
+                        onChange={(e) => setSignatoryCheckedReceived(prev => ({ ...prev, date: e.target.value }))}
+                        className={`w-full px-2.5 py-1.5 rounded-lg border text-xs focus:outline-none ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-800'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* E-Signature Area */}
+                <div className="pt-2 border-t border-dashed dark:border-slate-800">
+                  <div className="h-16 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 flex items-center justify-center relative overflow-hidden mb-2">
+                    {signatoryCheckedReceived.signatureImage ? (
+                      <img src={signatoryCheckedReceived.signatureImage} alt="Received Sig" className="object-contain h-full w-full p-1" />
+                    ) : (
+                      <span className="text-[9px] text-slate-400 italic">No e-signature attached</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1">
+                      <Upload size={10} />
+                      <span>Upload</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleDirectSignatureUpload('checkedReceived', file);
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => openSignatureModal('checkedReceived')}
+                      className="flex-1 px-2 py-1.5 rounded-lg border text-[9px] font-black uppercase text-center bg-brand-orange/10 border-brand-orange/30 text-brand-orange hover:bg-brand-orange/20 cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <PenTool size={10} />
+                      <span>Draw</span>
+                    </button>
+                    {signatoryCheckedReceived.signatureImage && (
+                      <button
+                        type="button"
+                        onClick={() => clearSignatureData('checkedReceived')}
+                        className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-500/10 cursor-pointer"
+                        title="Remove Signature"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* SECTION 4: GENERAL REMARKS */}
           <div className={`p-4 rounded-xl border shadow-xs text-left ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-150'}`}>
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Additional Receipt Instructions or Dispatch notes</label>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Section 4: Additional Receipt Instructions or Dispatch notes</label>
             <textarea
               rows={3}
               placeholder="Provide delivery routing conditions or remarks for Logistics drivers..."
@@ -2474,329 +3189,470 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             />
           </div>
 
+          {/* STEP 1 BOTTOM ACTION: PROCEED TO PRINT PREVIEW */}
+          <div className="flex items-center justify-between p-4 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => navigate('/delivery-receipt')}
+              className="px-4 py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+            >
+              Cancel & Exit
+            </button>
+            <button
+              type="button"
+              onClick={handleProceedToPreview}
+              className="px-6 py-3 rounded-xl font-black text-xs uppercase tracking-widest text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90 bg-brand-orange"
+            >
+              <span>Proceed to Step 2: Print Preview & Authorize</span>
+              <ArrowRight size={16} strokeWidth={2.5} />
+            </button>
+          </div>
+
         </div>
 
-        {/* PRINT / PREVIEW RENDER PANEL MATCHING PHOENIX LAYOUT */}
-        <div className={`lg:col-span-12 print:block ${isPrintPreviewActive ? 'block' : 'hidden'}`}>
-          <div className="border bg-white text-zinc-900 p-8 shadow-md rounded-2xl relative select-none print:shadow-none print:border-none print:p-0 max-w-4xl mx-auto font-sans">
-            {/* Header branding logo section (Screenshot requested by user) */}
-            <div className="flex items-center justify-center mb-1 pb-1">
-              <img 
-                src="https://www.phoenix.com.ph/wp-content/uploads/2026/06/Screenshot-2026-06-04-093703.png"
-                alt="Phoenix Publishing House Logo Header"
-                className="w-full object-contain max-h-[85px]"
-                referrerPolicy="no-referrer"
-              />
-            </div>
-
-            {/* Document title & top right date blocks */}
-            <div className="flex items-center justify-between mt-2.5">
-              <div className="w-1/4" />
-              <div className="w-2/4 text-center">
-                <h2 className="text-[14px] font-black tracking-widest text-zinc-900 uppercase font-sans">
-                  DELIVERY ACCEPTANCE
-                </h2>
-              </div>
-
-              {/* Box container for Date and DR No. matching paper sketch */}
-              <div className="w-1/4 flex justify-end">
-                <div className="border border-zinc-500 rounded-sm overflow-hidden shrink-0 text-center text-[10px] w-[165px] leading-tight">
-                  <div className="border-b border-zinc-500 p-1 flex items-center justify-between px-2 bg-zinc-50">
-                    <span className="font-bold text-zinc-500 uppercase">Date:</span>
-                    <span className="font-mono font-bold text-zinc-800">
-                      {dateOfAcceptance ? new Date(dateOfAcceptance).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '--/--/----'}
-                    </span>
-                  </div>
-                  <div className="p-1 flex items-center justify-between px-2 bg-zinc-100/50">
-                    <span className="font-bold text-zinc-500 uppercase">DR No.</span>
-                    <span className="font-mono font-bold text-zinc-900 tracking-wider">
-                      {drNo || '00014-2627'}
-                    </span>
+        {/* STEP 2: PRINT / PREVIEW RENDER PANEL MATCHING PHOENIX LAYOUT (2nd Step Before Save & Publish) */}
+        <div className={`lg:col-span-12 print:block ${currentStep === 2 ? 'block' : 'hidden'}`}>
+          
+          {/* Multi-Bundle Page Selector Tabs (Only shown when multiple ACE bundle pages exist) */}
+          {(() => {
+            const acePages = getAcePrintPages(hardwareItems);
+            if (acePages.length <= 1) return null;
+            return (
+              <div className="max-w-4xl mx-auto mb-4 p-3.5 rounded-2xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 print:hidden shadow-xs">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-brand-orange" />
+                  <div>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white">
+                      ACE Multi-Bundle Document Pagination ({acePages.length} Pages Generated)
+                    </h3>
+                    <p className="text-[10px] text-slate-400">
+                      Arduino & Raspberry on separate pages; Little Bits, Micro:Bit, Makey-Makey & AF Tools grouped on same page.
+                    </p>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Client information fields grid */}
-            <div className="grid grid-cols-12 gap-y-2 text-[10px] text-left mt-4 pb-4 border-b border-zinc-300">
-              
-              <div className="col-span-7 flex flex-col pr-4 justify-end">
-                <div className="flex items-end">
-                  <span className="w-24 shrink-0 font-bold text-zinc-700">Delivered to</span>
-                  <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                  <span className="font-black text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
-                    {deliveredTo || 'ST. LOUIS SCHOOL (CENTER), INC.'}
-                  </span>
-                </div>
-              </div>
-              <div className="col-span-5 flex items-end">
-                <span className="w-20 shrink-0 font-bold text-zinc-700">Client Code</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-mono font-bold text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                  {clientCode || 'C00000231(GS)'}
-                </span>
-              </div>
-
-              <div className="col-span-7 flex items-end pr-4">
-                <span className="w-24 shrink-0 font-bold text-zinc-700">Address</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
-                  {address || 'ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN'}
-                </span>
-              </div>
-              <div className="col-span-5 flex items-end">
-                <span className="w-20 shrink-0 font-bold text-zinc-700">Agent</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-semibold text-zinc-850 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                  {agent || 'Team Gina'}
-                </span>
-              </div>
-
-              <div className="col-span-7 flex items-end pr-4">
-                <span className="w-24 shrink-0 font-bold text-zinc-700">Contact Person</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-medium text-zinc-800 border-b border-zinc-350 flex-grow pb-0.5 pl-1 truncate">
-                  {contactPerson || <span className="text-zinc-300">__________________________________________</span>}
-                </span>
-              </div>
-              <div className="col-span-5 flex items-end">
-                <span className="w-20 shrink-0 font-bold text-zinc-700">Project</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-bold text-zinc-950 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
-                  {project || 'ARALINKS ACE'}
-                </span>
-              </div>
-
-              <div className="col-span-7 flex items-end pr-4">
-                <span className="w-24 shrink-0 font-bold text-zinc-700">Contact No.</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                  {contactNo || <span className="text-zinc-300">__________________________________________</span>}
-                </span>
-              </div>
-              <div className="col-span-5 flex items-end">
-                <span className="w-20 shrink-0 font-bold text-zinc-700">MOA</span>
-                <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                <span className="font-semibold text-zinc-805 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
-                  {moa || 'S.Y. 2023 TO S.Y. 2024 TO S.Y. 2025-26'}
-                </span>
-              </div>
-
-            </div>
-
-            {/* HARDWARE ITEMS TABLE (Matches physical style closely) */}
-            <div className="mt-4 text-[9.5px] text-left">
-              <table className="w-full border-collapse border border-zinc-400">
-                <thead>
-                  <tr className="bg-zinc-100 text-[8.5px] font-black uppercase text-zinc-650 border-b border-zinc-400">
-                    <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Quantity</th>
-                    <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Unit</th>
-                    <th className="border-r border-zinc-400 px-3 py-1.5 text-left w-1/2">Description</th>
-                    <th className="border-r border-zinc-400 px-3 py-1.5 text-left">Specifications</th>
-                    <th className="px-3 py-1.5 text-left">Remarks</th>
-                  </tr>
-                </thead>
-                <tbody className="text-[9.5px]">
-                  {/* Category Indicator Row mimicking paper template */}
-                  <tr className="border-b border-zinc-300 font-bold text-zinc-800 bg-zinc-50/70">
-                    <td className="border-r border-zinc-300 py-1 text-center"></td>
-                    <td className="border-r border-zinc-300 py-1 text-center"></td>
-                    <td colSpan={3} className="px-3 py-1 font-black uppercase tracking-wider text-[8.5px] text-zinc-700">
-                      Hardware
-                    </td>
-                  </tr>
-
-                  {hardwareItems.map((hw, idx) => (
-                    <tr key={hw.id || idx} className="border-b border-zinc-200">
-                      <td className="border-r border-zinc-400 px-2 py-1 text-center font-bold font-mono text-zinc-900">{hw.qty}</td>
-                      <td className="border-r border-zinc-400 px-2 py-1 text-center text-zinc-600 font-sans">{hw.unit}</td>
-                      <td className="border-r border-zinc-400 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px]" title={hw.description}>{hw.description || '------'}</td>
-                      <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 truncate max-w-[150px]" title={hw.specifications}>
-                        {(() => {
-                          const rowItemCode = hw.item_code;
-                          const isSerialized = isSerializedItem(rowItemCode, hw.description);
-                          const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
-                          if ((isSerialized || isBundled) && hw.specifications) {
-                            return formatSerialRanges(hw.specifications);
-                          }
-                          return hw.specifications || '------';
-                        })()}
-                      </td>
-                      <td className="px-3 py-1 text-zinc-600 truncate max-w-[140px]" title={hw.remarks}>
-                        {(() => {
-                          if (!hw.remarks) return '------';
-                          const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
-                          if (bName) {
-                            const bColor = getBundleColor(bName);
-                            if (bColor) {
-                              return (
-                                <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
-                                  {hw.remarks}
-                                </span>
-                              );
-                            }
-                          }
-                          return hw.remarks;
-                        })()}
-                      </td>
-                    </tr>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewActivePageTab('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                      previewActivePageTab === 'all'
+                        ? 'bg-brand-orange text-white shadow-xs'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    View All ({acePages.length})
+                  </button>
+                  {acePages.map((page) => (
+                    <button
+                      key={page.pageNumber}
+                      type="button"
+                      onClick={() => setPreviewActivePageTab(page.pageNumber)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 ${
+                        previewActivePageTab === page.pageNumber
+                          ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xs'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: page.badgeColor }} />
+                      <span>Page {page.pageNumber}: {page.groupKey === 'arduino' ? 'Arduino' : page.groupKey === 'raspberry' ? 'Raspberry' : page.groupKey === 'toolkit_group' ? 'Toolkits' : 'Hardware'}</span>
+                    </button>
                   ))}
-                  {/* Fill empty lines up to 8 rows for that notepad look */}
-                  {Array.from({ length: Math.max(0, 8 - hardwareItems.length) }).map((_, i) => (
-                    <tr key={`empty-hw-${i}`} className="h-[21px] border-b border-zinc-200">
-                      <td className="border-r border-zinc-400"></td>
-                      <td className="border-r border-zinc-400"></td>
-                      <td className="border-r border-zinc-400"></td>
-                      <td className="border-r border-zinc-400"></td>
-                      <td></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-
-
-            {/* Document Remarks/Footnotes */}
-            {remarks && (
-              <div className="mt-3.5 p-2 rounded border border-zinc-200 text-left text-[8.5px] leading-relaxed text-zinc-500 font-sans">
-                <span className="font-extrabold text-[#FF6A00] uppercase block mb-0.5">Dispatcher / Routing Notes:</span>
-                {remarks}
-              </div>
-            )}
-
-            {/* SIGNATURE FIELDS AT THE BOTTOM (A high-fidelity 2x2 paper document signatory section) */}
-            <div className="mt-6 pt-4 border-t border-zinc-300 grid grid-cols-2 gap-x-12 gap-y-5 text-left leading-snug text-[10px]">
-              
-              {/* Row 1 Column 1: Prepared */}
-              <div className="space-y-1.5 flex flex-col justify-between">
-                <div>
-                  <span className="text-[9px] font-bold uppercase text-zinc-600 block">Prepared by/ Date:</span>
-                </div>
-                <div 
-                  onClick={() => openSignatureModal('prepared')}
-                  className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all"
-                >
-                  {signatoryPrepared.signatureImage ? (
-                    <img src={signatoryPrepared.signatureImage} alt="Prepared Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                  ) : signatoryPrepared.name ? (
-                    <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                      <PenTool size={10} className="text-brand-orange" />
-                      <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
-                    </div>
-                  ) : (
-                    <span className="text-zinc-300 text-[9px] italic">Sign here</span>
-                  )}
-                </div>
-                <div className="text-center font-sans">
-                  <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">{signatoryPrepared.name || 'Bianca Aguinaldo'}</span>
-                  <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
                 </div>
               </div>
+            );
+          })()}
 
-              {/* Row 1 Column 2: Delivered/Installed */}
-              <div className="space-y-1.5 flex flex-col justify-between">
-                <div>
-                  <span className="text-[9px] font-bold uppercase text-zinc-600 block">Delivered/Installed by/ Date:</span>
-                </div>
-                <div 
-                  onClick={() => openSignatureModal('delivered')}
-                  className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all"
+          {/* RENDER PAGES (Each page has complete Phoenix layout with identical header and 2x2 signatory footer) */}
+          {(() => {
+            const acePages = getAcePrintPages(hardwareItems);
+            return acePages.map((page, pageIdx) => {
+              const isVisibleOnScreen = previewActivePageTab === 'all' || previewActivePageTab === page.pageNumber;
+              return (
+                <div
+                  key={`ace-preview-page-${page.pageNumber}`}
+                  className={`border bg-white text-zinc-900 p-8 shadow-md rounded-2xl relative select-none print:shadow-none print:border-none print:p-0 max-w-4xl mx-auto font-sans mb-8 print:mb-0 print:block ${
+                    isVisibleOnScreen ? 'block' : 'hidden'
+                  }`}
+                  style={{
+                    breakAfter: pageIdx < acePages.length - 1 ? 'page' : 'auto',
+                    pageBreakAfter: pageIdx < acePages.length - 1 ? 'always' : 'auto'
+                  }}
                 >
-                  {signatoryDelivered.signatureImage ? (
-                    <img src={signatoryDelivered.signatureImage} alt="Delivered Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                  ) : signatoryDelivered.name ? (
-                    <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                      <PenTool size={10} className="text-brand-orange" />
-                      <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
-                    </div>
-                  ) : (
-                    <span className="text-zinc-300 text-[9px] italic">Sign here</span>
-                  )}
-                </div>
-                <div className="text-center font-sans">
-                  <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[240px] mx-auto text-[10px] uppercase tracking-wide leading-none">c/o DID STAFF: {signatoryDelivered.name || 'JOHN ROBERT PAGALA'}</span>
-                  <span className="text-[8px] text-zinc-440 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature/Date</span>
-                </div>
-              </div>
-
-              {/* Row 2 Column 1: Approved */}
-              <div className="space-y-1.5 flex flex-col justify-between">
-                <div>
-                  <span className="text-[9px] font-bold uppercase text-zinc-600 block">Approved by/ Date:</span>
-                </div>
-                <div 
-                  onClick={() => openSignatureModal('approved')}
-                  className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all"
-                >
-                  {signatoryApproved.signatureImage ? (
-                    <img src={signatoryApproved.signatureImage} alt="Approved Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                  ) : signatoryApproved.name ? (
-                    <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                      <PenTool size={10} className="text-brand-orange" />
-                      <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
-                    </div>
-                  ) : (
-                    <span className="text-zinc-300 text-[9px] italic">Sign here</span>
-                  )}
-                </div>
-                <div className="text-center font-sans">
-                  <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">{signatoryApproved.name || 'JERALD DELA CRUZ'}</span>
-                  <span className="text-[8px] text-zinc-440 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
-                </div>
-              </div>
-
-              {/* Row 2 Column 2: Checked and Received */}
-              <div className="space-y-1.5 flex flex-col justify-between">
-                <div>
-                  <span className="text-[9px] font-bold uppercase text-zinc-650 block">CHECKED and Received the above articles in good order and condition:</span>
-                </div>
-                <div 
-                  onClick={() => openSignatureModal('checkedReceived')}
-                  className="h-14 border border-dashed border-zinc-250 rounded bg-orange-50/5 hover:bg-orange-50/15 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all"
-                >
-                  {signatoryCheckedReceived.signatureImage ? (
-                    <img src={signatoryCheckedReceived.signatureImage} alt="Received Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                  ) : signatoryCheckedReceived.name ? (
-                    <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                      <PenTool size={10} className="text-brand-orange" />
-                      <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
-                    </div>
-                  ) : (
-                    <div className="text-center font-mono flex items-center justify-center gap-1">
-                      <PenTool size={10} className="text-brand-orange animate-bounce" />
-                      <span className="text-[7.5px] text-brand-orange font-bold uppercase tracking-wider">Receiver Sign</span>
-                    </div>
-                  )}
-                </div>
-                <div className="text-center font-sans">
-                  <div className="max-w-[200px] mx-auto">
-                    <input
-                      type="text"
-                      placeholder="Enter receiver name..."
-                      value={signatoryCheckedReceived.name}
-                      onChange={(e) => setSignatoryCheckedReceived(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full text-center font-extrabold border-b border-zinc-400 focus:outline-none focus:border-brand-orange text-zinc-900 pb-0.5 leading-none text-[10px] uppercase bg-transparent"
+                  {/* Header branding logo section */}
+                  <div className="flex items-center justify-center mb-1 pb-1">
+                    <img 
+                      src="https://www.phoenix.com.ph/wp-content/uploads/2026/06/Screenshot-2026-06-04-093703.png"
+                      alt="Phoenix Publishing House Logo Header"
+                      className="w-full object-contain max-h-[85px]"
+                      referrerPolicy="no-referrer"
                     />
                   </div>
-                  <span className="text-[8px] text-zinc-440 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature/Date</span>
+
+                  {/* Document title & top right date blocks */}
+                  <div className="flex items-center justify-between mt-2.5">
+                    <div className="w-1/4 flex items-center">
+                      {acePages.length > 1 && (
+                        <span 
+                          className="px-2 py-0.5 rounded text-[8.5px] font-black uppercase tracking-wider text-white print:hidden"
+                          style={{ backgroundColor: page.badgeColor }}
+                        >
+                          {page.groupLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="w-2/4 text-center">
+                      <h2 className="text-[14px] font-black tracking-widest text-zinc-900 uppercase font-sans">
+                        DELIVERY ACCEPTANCE
+                      </h2>
+                    </div>
+
+                    {/* Box container for Date and DR No. matching paper sketch */}
+                    <div className="w-1/4 flex justify-end">
+                      <div className="border border-zinc-500 rounded-sm overflow-hidden shrink-0 text-center text-[10px] w-[165px] leading-tight">
+                        <div className="border-b border-zinc-500 p-1 flex items-center justify-between px-2 bg-zinc-50">
+                          <span className="font-bold text-zinc-500 uppercase">Date:</span>
+                          <span className="font-mono font-bold text-zinc-800">
+                            {dateOfAcceptance ? new Date(dateOfAcceptance).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '--/--/----'}
+                          </span>
+                        </div>
+                        <div className="p-1 flex items-center justify-between px-2 bg-zinc-100/50">
+                          <span className="font-bold text-zinc-500 uppercase">DR No.</span>
+                          <span className="font-mono font-bold text-zinc-900 tracking-wider">
+                            {drNo || '00014-2627'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Client information fields grid */}
+                  <div className="grid grid-cols-12 gap-y-2 text-[10px] text-left mt-4 pb-4 border-b border-zinc-300">
+                    
+                    <div className="col-span-7 flex flex-col pr-4 justify-end">
+                      <div className="flex items-end">
+                        <span className="w-24 shrink-0 font-bold text-zinc-700">Delivered to</span>
+                        <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                        <span className="font-black text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
+                          {deliveredTo || 'ST. LOUIS SCHOOL (CENTER), INC.'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="col-span-5 flex items-end">
+                      <span className="w-20 shrink-0 font-bold text-zinc-700">Client Code</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-mono font-bold text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                        {clientCode || 'C00000231(GS)'}
+                      </span>
+                    </div>
+
+                    <div className="col-span-7 flex items-end pr-4">
+                      <span className="w-24 shrink-0 font-bold text-zinc-700">Address</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
+                        {address || 'ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN'}
+                      </span>
+                    </div>
+                    <div className="col-span-5 flex items-end">
+                      <span className="w-20 shrink-0 font-bold text-zinc-700">Agent</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-semibold text-zinc-850 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                        {agent || 'Team Gina'}
+                      </span>
+                    </div>
+
+                    <div className="col-span-7 flex items-end pr-4">
+                      <span className="w-24 shrink-0 font-bold text-zinc-700">Contact Person</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-medium text-zinc-800 border-b border-zinc-350 flex-grow pb-0.5 pl-1 truncate">
+                        {contactPerson || <span className="text-zinc-300">__________________________________________</span>}
+                      </span>
+                    </div>
+                    <div className="col-span-5 flex items-end">
+                      <span className="w-20 shrink-0 font-bold text-zinc-700">Project</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-bold text-zinc-950 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
+                        {project || 'ARALINKS ACE'}
+                      </span>
+                    </div>
+
+                    <div className="col-span-7 flex items-end pr-4">
+                      <span className="w-24 shrink-0 font-bold text-zinc-700">Contact No.</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                        {contactNo || <span className="text-zinc-300">__________________________________________</span>}
+                      </span>
+                    </div>
+                    <div className="col-span-5 flex items-end">
+                      <span className="w-20 shrink-0 font-bold text-zinc-700">MOA</span>
+                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                      <span className="font-semibold text-zinc-805 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
+                        {moa || 'S.Y. 2023 TO S.Y. 2024 TO S.Y. 2025-26'}
+                      </span>
+                    </div>
+
+                  </div>
+
+                  {/* HARDWARE ITEMS TABLE (Matches physical style closely) */}
+                  <div className="mt-4 text-[9.5px] text-left">
+                    <table className="w-full border-collapse border border-zinc-400">
+                      <thead>
+                        <tr className="bg-zinc-100 text-[8.5px] font-black uppercase text-zinc-650 border-b border-zinc-400">
+                          <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Quantity</th>
+                          <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Unit</th>
+                          <th className="border-r border-zinc-400 px-3 py-1.5 text-left w-1/2">Description</th>
+                          <th className="border-r border-zinc-400 px-3 py-1.5 text-left">Specifications</th>
+                          <th className="px-3 py-1.5 text-left">Remarks</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-[9.5px]">
+                        {/* Category Indicator Row mimicking paper template */}
+                        <tr className="border-b border-zinc-300 font-bold text-zinc-800 bg-zinc-50/70">
+                          <td className="border-r border-zinc-300 py-1 text-center"></td>
+                          <td className="border-r border-zinc-300 py-1 text-center"></td>
+                          <td colSpan={3} className="px-3 py-1 font-black uppercase tracking-wider text-[8.5px] text-zinc-700">
+                            Hardware {acePages.length > 1 ? `— ${page.groupLabel}` : ''}
+                          </td>
+                        </tr>
+
+                        {page.items.map((hw, idx) => (
+                          <tr key={hw.id || idx} className="border-b border-zinc-200">
+                            <td className="border-r border-zinc-400 px-2 py-1 text-center font-bold font-mono text-zinc-900">{hw.qty}</td>
+                            <td className="border-r border-zinc-400 px-2 py-1 text-center text-zinc-600 font-sans">{hw.unit}</td>
+                            <td className="border-r border-zinc-400 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px]" title={hw.description}>{hw.description || '------'}</td>
+                            <td className="border-r border-zinc-400 px-3 py-1 font-mono text-[9px] text-zinc-650 truncate max-w-[150px]" title={hw.specifications}>
+                              {(() => {
+                                const rowItemCode = hw.item_code;
+                                const isSerialized = isSerializedItem(rowItemCode, hw.description);
+                                const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
+                                if ((isSerialized || isBundled) && hw.specifications) {
+                                  return formatSerialRanges(hw.specifications);
+                                }
+                                return hw.specifications || '------';
+                              })()}
+                            </td>
+                            <td className="px-3 py-1 text-zinc-600 truncate max-w-[140px]" title={hw.remarks}>
+                              {(() => {
+                                if (!hw.remarks) return '------';
+                                const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
+                                if (bName) {
+                                  const bColor = getBundleColor(bName);
+                                  if (bColor) {
+                                    return (
+                                      <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
+                                        {hw.remarks}
+                                      </span>
+                                    );
+                                  }
+                                }
+                                return hw.remarks;
+                              })()}
+                            </td>
+                          </tr>
+                        ))}
+                        {/* Fill empty lines up to 8 rows for that notepad look */}
+                        {Array.from({ length: Math.max(0, 8 - page.items.length) }).map((_, i) => (
+                          <tr key={`empty-hw-${page.pageNumber}-${i}`} className="h-[21px] border-b border-zinc-200">
+                            <td className="border-r border-zinc-400"></td>
+                            <td className="border-r border-zinc-400"></td>
+                            <td className="border-r border-zinc-400"></td>
+                            <td className="border-r border-zinc-400"></td>
+                            <td></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Document Remarks/Footnotes */}
+                  {remarks && (
+                    <div className="mt-3.5 p-2 rounded border border-zinc-200 text-left text-[8.5px] leading-relaxed text-zinc-500 font-sans">
+                      <span className="font-extrabold text-[#FF6A00] uppercase block mb-0.5">Dispatcher / Routing Notes:</span>
+                      {remarks}
+                    </div>
+                  )}
+
+                  {/* SIGNATURE FIELDS AT THE BOTTOM (A high-fidelity 2x2 paper document signatory section) */}
+                  <div className="mt-6 pt-4 border-t border-zinc-300 grid grid-cols-2 gap-x-12 gap-y-5 text-left leading-snug text-[10px]">
+                    
+                    {/* Row 1 Column 1: Prepared */}
+                    <div className="space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Prepared by/ Date:</span>
+                      </div>
+                      <div 
+                        onClick={() => openSignatureModal('prepared')}
+                        className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all group"
+                        title="Click to draw or upload signature"
+                      >
+                        {signatoryPrepared.signatureImage ? (
+                          <img src={signatoryPrepared.signatureImage} alt="Prepared Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                        ) : signatoryPrepared.name ? (
+                          <div className="text-zinc-400 text-center font-mono opacity-60 flex items-center gap-1 group-hover:opacity-100">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
+                          </div>
+                        ) : (
+                          <div className="text-center font-mono flex items-center justify-center gap-1 group-hover:scale-105 transition-all">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] text-brand-orange font-bold uppercase tracking-wider">Click to Sign / Upload</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-center font-sans">
+                        <input
+                          type="text"
+                          placeholder="Bianca Aguinaldo"
+                          value={signatoryPrepared.name}
+                          onChange={(e) => setSignatoryPrepared(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full text-center font-extrabold border-b border-zinc-400 focus:outline-none focus:border-brand-orange text-zinc-900 pb-0.5 leading-none text-[10px] uppercase bg-transparent max-w-[200px] mx-auto block"
+                        />
+                        <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
+                      </div>
+                    </div>
+
+                    {/* Row 1 Column 2: Delivered/Installed (Full name only - no date, no e-signature) */}
+                    <div className="space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Delivered/Installed by:</span>
+                      </div>
+                      <div className="h-14 flex items-center justify-center">
+                        {/* Clean open space for physical paper or full name alignment */}
+                      </div>
+                      <div className="text-center font-sans">
+                        <input
+                          type="text"
+                          placeholder="[ DELIVERED / INSTALLED BY NAME ]"
+                          value={signatoryDelivered.name}
+                          onChange={(e) => setSignatoryDelivered(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full text-center font-extrabold border-b border-zinc-400 focus:outline-none focus:border-brand-orange text-zinc-900 pb-0.5 leading-none text-[10px] uppercase bg-transparent max-w-[240px] mx-auto block"
+                        />
+                        <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name</span>
+                      </div>
+                    </div>
+
+                    {/* Row 2 Column 1: Approved */}
+                    <div className="space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Approved by/ Date:</span>
+                      </div>
+                      <div 
+                        onClick={() => openSignatureModal('approved')}
+                        className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all group"
+                        title="Click to draw or upload signature"
+                      >
+                        {signatoryApproved.signatureImage ? (
+                          <img src={signatoryApproved.signatureImage} alt="Approved Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                        ) : signatoryApproved.name ? (
+                          <div className="text-zinc-400 text-center font-mono opacity-60 flex items-center gap-1 group-hover:opacity-100">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
+                          </div>
+                        ) : (
+                          <div className="text-center font-mono flex items-center justify-center gap-1 group-hover:scale-105 transition-all">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] text-brand-orange font-bold uppercase tracking-wider">Click to Sign / Upload</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-center font-sans">
+                        <input
+                          type="text"
+                          placeholder="Jerald Dela Cruz"
+                          value={signatoryApproved.name}
+                          onChange={(e) => setSignatoryApproved(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full text-center font-extrabold border-b border-zinc-400 focus:outline-none focus:border-brand-orange text-zinc-900 pb-0.5 leading-none text-[10px] uppercase bg-transparent max-w-[200px] mx-auto block"
+                        />
+                        <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
+                      </div>
+                    </div>
+
+                    {/* Row 2 Column 2: Checked and Received */}
+                    <div className="space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[9px] font-bold uppercase text-zinc-650 block">CHECKED and Received the above articles in good order and condition:</span>
+                      </div>
+                      <div 
+                        onClick={() => openSignatureModal('checkedReceived')}
+                        className="h-14 border border-dashed border-zinc-200 rounded hover:bg-zinc-50 cursor-pointer relative overflow-hidden flex items-center justify-center transition-all group"
+                        title="Click to draw or upload signature"
+                      >
+                        {signatoryCheckedReceived.signatureImage ? (
+                          <img src={signatoryCheckedReceived.signatureImage} alt="Received Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                        ) : signatoryCheckedReceived.name ? (
+                          <div className="text-zinc-400 text-center font-mono opacity-60 flex items-center gap-1 group-hover:opacity-100">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] font-bold uppercase">Click to Sign</span>
+                          </div>
+                        ) : (
+                          <div className="text-center font-mono flex items-center justify-center gap-1 group-hover:scale-105 transition-all">
+                            <PenTool size={10} className="text-brand-orange" />
+                            <span className="text-[7.5px] text-brand-orange font-bold uppercase tracking-wider">Receiver Sign / Upload</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-center font-sans">
+                        <input
+                          type="text"
+                          placeholder="Enter receiver name..."
+                          value={signatoryCheckedReceived.name}
+                          onChange={(e) => setSignatoryCheckedReceived(prev => ({ ...prev, name: e.target.value }))}
+                          className="w-full text-center font-extrabold border-b border-zinc-400 focus:outline-none focus:border-brand-orange text-zinc-900 pb-0.5 leading-none text-[10px] uppercase bg-transparent max-w-[200px] mx-auto block"
+                        />
+                        <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature/Date</span>
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* Document Footnote standard alignment */}
+                  <div className="mt-8 border-t border-zinc-300 pt-3.5 flex items-center justify-between text-[8px] text-zinc-400 font-mono">
+                    <span>* Please fill up remarks field if necessary</span>
+                    <span className="font-bold">page {page.pageNumber} of {page.totalPages}</span>
+                    <span>cc: FPH I.T. Dept., Customer</span>
+                  </div>
                 </div>
-              </div>
+              );
+            });
+          })()}
 
-            </div>
+          {/* STEP 2 BOTTOM ACTIONS: BACK TO EDIT & SAVE & PUBLISH */}
+          <div className="flex items-center justify-between p-4 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 max-w-4xl mx-auto mt-6 print:hidden">
+            <button
+              type="button"
+              onClick={() => setCurrentStep(1)}
+              className="px-5 py-2.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+            >
+              <ArrowLeft size={14} />
+              <span>Back to Edit Form (Step 1)</span>
+            </button>
 
-            {/* Document Footnote standard alignment */}
-            <div className="mt-8 border-t border-zinc-300 pt-3.5 flex items-center justify-between text-[8px] text-zinc-400 font-mono">
-              <span>* Please fill up remarks field if necessary</span>
-              <span className="font-bold">page 1 of 1</span>
-              <span>cc: FPH I.T. Dept., Customer</span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-4 py-2.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 cursor-pointer bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100"
+              >
+                <Printer size={14} />
+                <span>Print Document</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveDeliveryReceipt}
+                className="px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
+                style={{ backgroundColor: 'var(--brand-accent)' }}
+              >
+                <Save size={14} strokeWidth={2.5} />
+                <span>{isEditMode ? 'Update Record' : 'Save & Publish Delivery Receipt'}</span>
+              </button>
             </div>
           </div>
+
         </div>
 
       </div>
 
-      {/* CORE DRIVER CANVAS MODAL FOR SCRIBBLED SIGNATURES */}
+      {/* ENHANCED 3-TAB E-SIGNATURE MODAL (UPLOAD, DRAW, TYPE) */}
       {isSignModalOpen && (
         <div className="fixed inset-0 bg-black/65 backdrop-blur-xs z-[2000] flex items-center justify-center p-4">
           <div className={`p-6 rounded-2xl border shadow-2xl max-w-md w-full text-left font-sans ${
@@ -2804,84 +3660,218 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
           }`}>
             <div className="flex items-center justify-between border-b pb-3 mb-4.5 dark:border-slate-800">
               <div className="flex items-center gap-2">
-                <PenTool size={15} className="text-brand-orange" />
+                <PenTool size={16} className="text-brand-orange" />
                 <h3 className="text-sm font-black uppercase tracking-wider">
-                  Scribble Smart Signature
+                  Digital E-Signature Authentication
                 </h3>
               </div>
               <button
-                onClick={() => setIsSignModalOpen(false)}
+                onClick={() => {
+                  setIsSignModalOpen(false);
+                  setUploadedSigPreview(null);
+                }}
                 className="p-1 rounded text-slate-400 hover:text-slate-600 border-none bg-transparent cursor-pointer"
               >
                 <X size={15} />
               </button>
             </div>
 
+            {/* TAB SELECTOR */}
+            <div className="flex rounded-xl bg-slate-100 dark:bg-slate-950 p-1 mb-4">
+              <button
+                type="button"
+                onClick={() => setSigModalTab('upload')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  sigModalTab === 'upload'
+                    ? 'bg-white dark:bg-slate-800 text-brand-orange shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <Upload size={13} />
+                <span>Upload Image</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSigModalTab('draw')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  sigModalTab === 'draw'
+                    ? 'bg-white dark:bg-slate-800 text-brand-orange shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <PenTool size={13} />
+                <span>Draw on Canvas</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSigModalTab('type')}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  sigModalTab === 'type'
+                    ? 'bg-white dark:bg-slate-800 text-brand-orange shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <FileText size={13} />
+                <span>Type Name</span>
+              </button>
+            </div>
+
             <div className="space-y-4">
               
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-400">Printed Signatory Name</label>
-                <input
-                  type="text"
-                  placeholder="Enter Signee printed name..."
-                  value={typedSignName}
-                  onChange={(e) => setTypedSignName(e.target.value)}
-                  className={`px-3 py-1.5 rounded-lg border text-xs focus:outline-none ${
-                    isDarkMode ? 'bg-slate-950 border-slate-805 text-white animate-pulse' : 'bg-slate-50 border-slate-200 text-slate-800'
-                  }`}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400">Signatory Printed Name</label>
+                  <input
+                    type="text"
+                    placeholder="Enter full name..."
+                    value={typedSignName}
+                    onChange={(e) => setTypedSignName(e.target.value)}
+                    className={`px-3 py-2 rounded-lg border text-xs font-bold focus:outline-none ${
+                      isDarkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'
+                    }`}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400">Date Signed</label>
+                  <input
+                    type="date"
+                    value={typedSignDate}
+                    onChange={(e) => setTypedSignDate(e.target.value)}
+                    className={`px-3 py-2 rounded-lg border text-xs focus:outline-none ${
+                      isDarkMode ? 'bg-slate-950 border-slate-800 text-white' : 'bg-slate-50 border-slate-200 text-slate-800'
+                    }`}
+                  />
+                </div>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[10px] font-black uppercase text-slate-400 flex items-center justify-between">
-                  <span>Draw Signature Area</span>
-                  <button
-                    type="button"
-                    onClick={clearSignatureCanvas}
-                    className="text-[9px] text-[#FF6A00] uppercase font-black hover:underline cursor-pointer border-none bg-transparent"
-                  >
-                    Clear Slate
-                  </button>
-                </label>
+              {/* TAB 1: UPLOAD E-SIGNATURE IMAGE */}
+              {sigModalTab === 'upload' && (
+                <div className="flex flex-col gap-2">
+                  <label className="text-[10px] font-black uppercase text-slate-400">Upload E-Signature File (PNG, JPG, SVG)</label>
+                  
+                  {uploadedSigPreview ? (
+                    <div className="relative border border-slate-200 dark:border-slate-800 rounded-xl p-3 bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center">
+                      <img
+                        src={uploadedSigPreview}
+                        alt="Signature preview"
+                        className="max-h-28 max-w-full object-contain mb-2"
+                      />
+                      <div className="flex items-center gap-2">
+                        <label className="px-3 py-1.5 rounded-lg border text-xs font-bold bg-white dark:bg-slate-900 hover:bg-slate-100 cursor-pointer text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                          <RefreshCw size={12} />
+                          <span>Replace Image</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleSignatureFileUpload}
+                            className="hidden"
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setUploadedSigPreview(null)}
+                          className="px-3 py-1.5 rounded-lg border text-xs font-bold bg-rose-500/10 border-rose-500/20 text-rose-600 hover:bg-rose-500/20 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Trash2 size={12} />
+                          <span>Remove</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <label className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-brand-orange rounded-xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer bg-slate-50/50 dark:bg-slate-950/50 hover:bg-orange-500/5 transition-all">
+                      <div className="w-10 h-10 rounded-full bg-brand-orange/10 flex items-center justify-center text-brand-orange">
+                        <Upload size={20} />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-bold text-slate-700 dark:text-slate-200">Click to browse or drop signature image</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Supports transparent PNG, JPG, or WEBP (Max 5MB)</p>
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleSignatureFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
 
-                {/* Sign Canvas block */}
-                <canvas
-                  ref={canvasRef}
-                  width={380}
-                  height={150}
-                  onMouseDown={startScribble}
-                  onMouseMove={drawScribbling}
-                  onMouseUp={stopScribbling}
-                  onMouseLeave={stopScribbling}
-                  onTouchStart={startScribble}
-                  onTouchMove={drawScribbling}
-                  onTouchEnd={stopScribbling}
-                  className="w-full bg-zinc-50 dark:bg-slate-950/40 border border-zinc-250 dark:border-slate-800 rounded-xl cursor-[url(pencil.png),_pointer] h-[150px] touch-none"
-                />
-              </div>
+              {/* TAB 2: DRAW ON CANVAS */}
+              {sigModalTab === 'draw' && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black uppercase text-slate-400 flex items-center justify-between">
+                    <span>Draw Signature Below</span>
+                    <button
+                      type="button"
+                      onClick={clearSignatureCanvas}
+                      className="text-[9px] text-[#FF6A00] uppercase font-black hover:underline cursor-pointer border-none bg-transparent"
+                    >
+                      Clear Slate
+                    </button>
+                  </label>
 
-              <p className="text-[9.5px] text-slate-400 leading-normal italic text-center">
-                * Drag mouse or finger draw signature onto the white canvas correctly. Electronic signatures hold equal priority weights.
-              </p>
+                  <canvas
+                    ref={canvasRef}
+                    width={380}
+                    height={150}
+                    onMouseDown={startScribble}
+                    onMouseMove={drawScribbling}
+                    onMouseUp={stopScribbling}
+                    onMouseLeave={stopScribbling}
+                    onTouchStart={startScribble}
+                    onTouchMove={drawScribbling}
+                    onTouchEnd={stopScribbling}
+                    className="w-full bg-zinc-50 dark:bg-slate-950/40 border border-zinc-250 dark:border-slate-800 rounded-xl cursor-crosshair h-[150px] touch-none"
+                  />
+                  <p className="text-[9.5px] text-slate-400 leading-normal italic text-center">
+                    * Draw using mouse or touchscreen finger.
+                  </p>
+                </div>
+              )}
 
-              <div className="flex items-center justify-end gap-2.5 pt-2">
+              {/* TAB 3: TYPE PRINTED NAME */}
+              {sigModalTab === 'type' && (
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center min-h-[120px] text-center">
+                  <p className="font-serif italic text-2xl text-slate-800 dark:text-slate-100 mb-1">
+                    {typedSignName || 'Your Signature Name'}
+                  </p>
+                  <div className="w-48 h-0.5 bg-slate-300 dark:bg-slate-700 my-1" />
+                  <p className="text-[10px] text-slate-400 font-mono uppercase">
+                    Digitally Authorized: {typedSignDate || new Date().toLocaleDateString()}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => saveSignatureDetails('typed')}
+                  onClick={() => {
+                    setIsSignModalOpen(false);
+                    setUploadedSigPreview(null);
+                  }}
                   className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
                     isDarkMode ? 'bg-slate-800 text-slate-350 hover:text-white' : 'bg-slate-100 text-slate-650 hover:bg-slate-200'
                   }`}
                 >
-                  Use Printed Name Only
+                  Cancel
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => saveSignatureDetails('drawn')}
-                  className="px-4.5 py-2 rounded-xl text-xs font-black uppercase text-white shadow bg-brand-orange inline-flex items-center gap-1.5 active:scale-95 cursor-pointer transition-all hover:opacity-90"
+                  onClick={() => {
+                    if (sigModalTab === 'upload') {
+                      saveSignatureDetails('uploaded');
+                    } else if (sigModalTab === 'draw') {
+                      saveSignatureDetails('drawn');
+                    } else {
+                      saveSignatureDetails('typed');
+                    }
+                  }}
+                  className="px-5 py-2 rounded-xl text-xs font-black uppercase text-white shadow bg-brand-orange inline-flex items-center gap-1.5 active:scale-95 cursor-pointer transition-all hover:opacity-90"
                 >
                   <Check size={14} strokeWidth={3} />
-                  Authorize & Apply
+                  <span>Save & Apply Signature</span>
                 </button>
               </div>
 

@@ -7,9 +7,13 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface ArchivedModuleProps {
   isDarkMode?: boolean;
+  userRole?: string | null;
 }
 
-const ArchivedModule: React.FC<ArchivedModuleProps> = ({ isDarkMode = false }) => {
+const ArchivedModule: React.FC<ArchivedModuleProps> = ({ 
+  isDarkMode = false,
+  userRole = localStorage.getItem('aralinks_role') || 'Staff'
+}) => {
   const [activeTab, setActiveTab] = useState<'requests' | 'items'>('requests');
   const [counts, setCounts] = useState({ requests: 0, items: 0 });
 

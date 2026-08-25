@@ -3,7 +3,7 @@ import {
   Search, Plus, Trash2, Edit3, ChevronDown, ChevronUp, Loader2, 
   Calendar, FileText, ShoppingCart, Truck, School, User, 
   Settings, CheckCircle2, AlertCircle, X, Layers, Bell, ClipboardList, AppWindow, Play,
-  Download
+  Download, RefreshCw, Sparkles, PackageCheck, Package
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { toTitleCase, getProgramBadgeClass } from '../lib/utils';
@@ -25,6 +25,7 @@ interface SchoolMonitoringRecord {
   target_deployment_date: string;
   status: number; // 1 to 7
   status_dates: Record<number, string>; // status step -> Date string
+  item_received_status?: 'Partial' | 'Delivered' | '';
   items: DesignatedHardwareItem[];
   created_at?: string;
   updated_at?: string;
@@ -46,13 +47,13 @@ interface InventoryOption {
 }
 
 const STATUS_STEPS = [
-  { step: 1, label: 'Received initial Document', icon: FileText },
-  { step: 2, label: 'Received latest Document', icon: Layers },
-  { step: 3, label: 'Creation of Item request', icon: ClipboardList },
-  { step: 4, label: 'Received Item Request by Admin', icon: Bell },
-  { step: 5, label: 'Purchased Order by Admin', icon: ShoppingCart },
-  { step: 6, label: 'In Transit', icon: Truck },
-  { step: 7, label: 'Delivered Date to School', icon: School }
+  { step: 1, label: 'Received Initial document', icon: FileText },
+  { step: 2, label: 'Received Latest document', icon: Layers },
+  { step: 3, label: 'Creation of item request', icon: ClipboardList },
+  { step: 4, label: 'Item Received', icon: PackageCheck },
+  { step: 5, label: 'Preparing Item', icon: Settings },
+  { step: 6, label: 'In transit', icon: Truck },
+  { step: 7, label: 'Delivered', icon: School }
 ];
 
 // Helper to format date into "DD MMM YYYY" (e.g. 02 May 2024)
@@ -130,13 +131,15 @@ const renderCustomStepIcon = (step: number, isActive: boolean) => {
     case 4:
       return (
         <div className="relative w-10 h-10 flex items-center justify-center">
-          <svg className={`w-8 h-8 ${isActive ? 'text-orange-550 dark:text-orange-500' : 'text-slate-300 dark:text-slate-700'}`} fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+          <svg className={`w-8 h-8 ${isActive ? 'text-orange-550 dark:text-orange-500' : 'text-slate-300 dark:text-slate-700'}`} fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+            <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+            <line x1="12" y1="22.08" x2="12" y2="12" />
           </svg>
           {isActive && (
-            <div className="absolute bottom-0.5 right-0.5 bg-brand-orange text-white rounded-full p-[2px] border border-white dark:border-slate-900">
-              <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <div className="absolute bottom-0 right-0 bg-emerald-500 rounded-full p-[2px] border border-white dark:border-slate-900 shadow-xs flex items-center justify-center">
+              <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" strokeWidth="4" viewBox="0 0 24 24">
+                <polyline points="20 6 9 17 4 12" />
               </svg>
             </div>
           )}
@@ -145,15 +148,14 @@ const renderCustomStepIcon = (step: number, isActive: boolean) => {
     case 5:
       return (
         <div className="relative w-10 h-10 flex items-center justify-center">
-          <svg className={`w-7.5 h-7.5 ${isActive ? 'text-orange-600' : 'text-slate-300 dark:text-slate-700'}`} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-            <circle cx="9" cy="21" r="1" fill="currentColor" />
-            <circle cx="20" cy="21" r="1" fill="currentColor" />
-            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+          <svg className={`w-7.5 h-7.5 ${isActive ? 'text-orange-600' : 'text-slate-300 dark:text-slate-700'}`} fill="none" stroke="currentColor" strokeWidth="2.2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
           {isActive && (
-            <div className="absolute top-0 right-0 bg-emerald-500 rounded-full p-[2px] border border-white dark:border-slate-900 flex items-center justify-center">
-              <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" strokeWidth="4.5" viewBox="0 0 24 24">
-                <polyline points="20 6 9 17 4 12" />
+            <div className="absolute top-0 right-0 bg-brand-orange text-white rounded-full p-[2px] border border-white dark:border-slate-900 flex items-center justify-center">
+              <svg className="w-2 h-2 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z" />
               </svg>
             </div>
           )}
@@ -189,7 +191,7 @@ const renderCustomStepIcon = (step: number, isActive: boolean) => {
 
 const MOCK_MONITORING_RECORDS: SchoolMonitoringRecord[] = [];
 
-export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMode = false }) => {
+export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: string | null }> = ({ isDarkMode = false, userRole = localStorage.getItem('aralinks_role') || 'Staff' }) => {
   const { showSuccess, showError, showInfo } = useNotification();
   const [records, setRecords] = useState<SchoolMonitoringRecord[]>([]);
   const [schools, setSchools] = useState<SchoolOption[]>([]);
@@ -274,8 +276,21 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
   });
   const [formItems, setFormItems] = useState<DesignatedHardwareItem[]>([]);
   const [schoolMonitoringId, setSchoolMonitoringId] = useState('');
-  const [typeOfDocument, setTypeOfDocument] = useState<'MOA' | 'Addendum' | 'AQL' | ''>('');
+  const [typeOfDocument, setTypeOfDocument] = useState<'MOA' | 'Addendum' | 'AQL' | 'IR' | ''>('');
   const [bundlesForProgram, setBundlesForProgram] = useState<{ name: string; items: { item_code: string; item_name: string; quantity: number }[] }[]>([]);
+
+  // Check for duplicate school monitoring ID in existing records
+  const duplicateIdRecord = useMemo(() => {
+    const trimmed = schoolMonitoringId.trim();
+    if (!trimmed) return null;
+    return records.find(r => {
+      if (editingRecord && r.id === editingRecord.id) return false;
+      return (
+        r.school_monitoring_id &&
+        r.school_monitoring_id.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+    }) || null;
+  }, [schoolMonitoringId, records, editingRecord]);
 
   // Search and filter states
   const [equipmentSearchQuery, setEquipmentSearchQuery] = useState('');
@@ -457,7 +472,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
         // Find receipt with Transit status
         const transitDR = receipts.find(r => 
           r.schoolName?.trim().toLowerCase() === schoolName.trim().toLowerCase() && 
-          r.status?.toLowerCase() === 'in transit'
+          (r.status?.toLowerCase() === 'in transit' || r.status?.toLowerCase() === 'partially delivered' || r.status?.toLowerCase() === 'delivered')
         );
         if (transitDR) {
           transitDateVal = transitDR.inTransitDate || transitDR.date || '';
@@ -478,6 +493,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
 
     // Evaluate item requests (database queries)
     let creationDateVal = '';
+    let firstDeliveredDateVal = '';
+    let itemRecStatus: 'Partial' | 'Delivered' | '' = '';
+
     if (isSupabaseConfigured) {
       try {
         const matchedRecord = records.find(r => r.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase());
@@ -485,8 +503,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
 
         let query = supabase
           .from('item_requests')
-          .select('control_no, date, created_at, school_monitoring_id')
-          .not('status', 'in', '("Deleted","Rejected")')
+          .select('id, control_no, date, created_at, school_monitoring_id, status')
+          .not('status', 'in', '("Deleted","Rejected","Cancelled")')
           .order('date', { ascending: false });
 
         if (targetSMId) {
@@ -495,14 +513,64 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           query = query.eq('school_name', schoolName);
         }
 
-        const { data, error } = await query.limit(1);
+        const { data, error } = await query;
 
         if (!error && data && data.length > 0) {
           // Use req date or format created_at date
           creationDateVal = data[0].date || data[0].created_at?.split('T')[0] || '';
+
+          // Check stock transactions for delivery
+          const matchedIds = data.map((d: any) => d.control_no || d.id).filter(Boolean);
+          if (matchedIds.length > 0) {
+            const { data: stData } = await supabase
+              .from('stock_transactions')
+              .select('reference_id, transaction_date, created_at')
+              .eq('transaction_type', 'Delivery')
+              .in('reference_id', matchedIds)
+              .order('transaction_date', { ascending: true })
+              .limit(1);
+
+            if (stData && stData.length > 0) {
+              firstDeliveredDateVal = stData[0].transaction_date || stData[0].created_at?.split('T')[0] || '';
+            }
+          }
+
+          const isFullyDelivered = data.some((ir: any) => ir.status === 'Delivered');
+          const isPartiallyDelivered = data.some((ir: any) => ir.status === 'Partially Delivered' || ir.status === 'Partial');
+
+          if (!firstDeliveredDateVal && (isFullyDelivered || isPartiallyDelivered)) {
+            firstDeliveredDateVal = creationDateVal || new Date().toISOString().split('T')[0];
+          }
+
+          if (firstDeliveredDateVal) {
+            itemRecStatus = isFullyDelivered ? 'Delivered' : 'Partial';
+          }
         }
       } catch (e) {
         console.warn('Item request query for automation failed:', e);
+      }
+    }
+
+    // Check local storage item requests as fallback
+    if (!creationDateVal) {
+      try {
+        const localIR = localStorage.getItem('aralinks_requests') || localStorage.getItem('aralinks_item_requests');
+        if (localIR) {
+          const parsed = JSON.parse(localIR);
+          const matched = (parsed || []).find((ir: any) => 
+            (ir.school_monitoring_id && ir.school_monitoring_id.trim().toUpperCase() === schoolMonitoringId?.trim().toUpperCase()) ||
+            (ir.school_name && ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase())
+          );
+          if (matched) {
+            creationDateVal = matched.date || matched.created_at?.split('T')[0] || '';
+            if (matched.status === 'Delivered' || matched.status === 'Partially Delivered') {
+              firstDeliveredDateVal = matched.date || new Date().toISOString().split('T')[0];
+              itemRecStatus = matched.status === 'Delivered' ? 'Delivered' : 'Partial';
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Local IR check failed:', err);
       }
     }
 
@@ -511,6 +579,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       const updated = { ...prev };
       if (creationDateVal) {
         updated[3] = creationDateVal;
+      }
+      if (firstDeliveredDateVal) {
+        updated[4] = firstDeliveredDateVal;
       }
       if (transitDateVal) {
         updated[6] = transitDateVal;
@@ -524,13 +595,14 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
     // Advance progress step level dynamically if steps have dates calculated
     setCurrentStatus(prev => {
       if (deliveredDateVal) return 7;
-      if (transitDateVal) return 6;
+      if (transitDateVal) return Math.max(prev, 6);
+      if (firstDeliveredDateVal) return Math.max(prev, 4);
       if (creationDateVal) return Math.max(prev, 3);
       return prev;
     });
 
-    if (creationDateVal || transitDateVal || deliveredDateVal) {
-      showInfo('AI Automation', `Synchronized real-time status dates: ${creationDateVal ? 'Item Request (Step 3)' : ''} ${transitDateVal ? 'Transit (Step 6)' : ''} ${deliveredDateVal ? 'Delivered (Step 7)' : ''}`);
+    if (creationDateVal || firstDeliveredDateVal || transitDateVal || deliveredDateVal) {
+      showInfo('AI Automation', `Synchronized real-time status dates: ${creationDateVal ? 'Item Request (Step 3)' : ''} ${firstDeliveredDateVal ? `Item Received [${itemRecStatus || 'Delivered'}] (Step 4)` : ''} ${transitDateVal ? 'Transit (Step 6)' : ''} ${deliveredDateVal ? 'Delivered (Step 7)' : ''}`);
     }
   };
 
@@ -671,25 +743,34 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
         }
       }
 
-      // 3b. Fetch all active item requests to sync school_monitoring stage 3
+      // 3b. Fetch all active item requests and stock transactions to sync school_monitoring stage 3 & 4
       let itemRequestsList: any[] = [];
+      let stockTransactionsList: any[] = [];
       if (isSupabaseConfigured) {
         try {
           const { data: irData } = await supabase
             .from('item_requests')
-            .select('school_monitoring_id, date, created_at, school_name')
-            .not('status', 'in', '("Deleted","Rejected")');
+            .select('id, control_no, school_monitoring_id, date, created_at, school_name, status')
+            .not('status', 'in', '("Deleted","Rejected","Cancelled")');
           if (irData) {
             itemRequestsList = irData;
           }
+
+          const { data: stData } = await supabase
+            .from('stock_transactions')
+            .select('reference_id, transaction_type, transaction_date, created_at')
+            .eq('transaction_type', 'Delivery');
+          if (stData) {
+            stockTransactionsList = stData;
+          }
         } catch (e) {
-          console.warn('Failed to fetch item requests for sync:', e);
+          console.warn('Failed to fetch item requests or stock transactions for sync:', e);
         }
       }
 
       setRecords(monitoringData);
 
-      // Sync in-memory records with the newest DR receipts status & dates AND item requests stage 3 date
+      // Sync in-memory records with the newest DR receipts status & dates AND item requests stage 3 & 4
       let hasSyncChanges = false;
       try {
         const drLocal = localStorage.getItem('aralinks_delivery_receipts');
@@ -700,17 +781,18 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           let recordChanged = false;
           let highestStatus = record.status;
           let targetDeploymentDate = record.target_deployment_date;
+          let itemReceivedStatus: 'Partial' | 'Delivered' | '' | undefined = record.item_received_status;
           const updatedDates = { ...record.status_dates };
 
           // 1. Match by school_monitoring_id in item_requests
-          if (record.school_monitoring_id) {
+          if (record.school_monitoring_id || schoolName) {
             const matchedIRs = itemRequestsList.filter(ir => 
-              ir.school_monitoring_id && 
-              ir.school_monitoring_id.trim().toUpperCase() === record.school_monitoring_id.trim().toUpperCase()
+              (ir.school_monitoring_id && record.school_monitoring_id && ir.school_monitoring_id.trim().toUpperCase() === record.school_monitoring_id.trim().toUpperCase()) ||
+              (ir.school_name && schoolName && ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase())
             );
 
             if (matchedIRs.length > 0) {
-              // Get the latest matched request
+              // Get the latest matched request for stage 3
               const latestIR = matchedIRs.reduce((latest, current) => {
                 const currentFullDate = current.date || current.created_at?.split('T')[0] || '';
                 const latestFullDate = latest.date || latest.created_at?.split('T')[0] || '';
@@ -722,6 +804,40 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                 updatedDates[3] = creationDateVal;
                 highestStatus = Math.max(highestStatus, 3);
                 recordChanged = true;
+              }
+
+              // Stage 4: Check delivery transactions for these item requests
+              const matchedReqIds = matchedIRs.map((ir: any) => ir.control_no || ir.id).filter(Boolean);
+              const matchedDeliveries = stockTransactionsList.filter(st => matchedReqIds.includes(st.reference_id));
+              
+              let firstDeliveryDate = '';
+              if (matchedDeliveries.length > 0) {
+                const sortedDeliveries = matchedDeliveries.sort((a, b) => {
+                  const dateA = a.transaction_date || a.created_at || '';
+                  const dateB = b.transaction_date || b.created_at || '';
+                  return dateA.localeCompare(dateB);
+                });
+                firstDeliveryDate = sortedDeliveries[0].transaction_date || sortedDeliveries[0].created_at?.split('T')[0] || '';
+              }
+
+              const isFullyDelivered = matchedIRs.some((ir: any) => ir.status === 'Delivered');
+              const isPartiallyDelivered = matchedIRs.some((ir: any) => ir.status === 'Partially Delivered' || ir.status === 'Partial');
+
+              if (!firstDeliveryDate && (isFullyDelivered || isPartiallyDelivered)) {
+                firstDeliveryDate = creationDateVal || new Date().toISOString().split('T')[0];
+              }
+
+              if (firstDeliveryDate) {
+                const newStatus: 'Partial' | 'Delivered' = isFullyDelivered ? 'Delivered' : 'Partial';
+                if (itemReceivedStatus !== newStatus) {
+                  itemReceivedStatus = newStatus;
+                  recordChanged = true;
+                }
+                if (updatedDates[4] !== firstDeliveryDate) {
+                  updatedDates[4] = firstDeliveryDate;
+                  highestStatus = Math.max(highestStatus, 4);
+                  recordChanged = true;
+                }
               }
             }
           }
@@ -1038,9 +1154,32 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
   };
 
   const generateSchoolMonitoringId = (existingRecords: SchoolMonitoringRecord[]) => {
-    const nextNum = existingRecords.length + 1;
-    const padded = String(nextNum).padStart(4, '0');
-    return `ARAL-IMS-2026-${padded}`;
+    const currentYear = new Date().getFullYear();
+    let maxNum = 0;
+    const existingIdSet = new Set<string>();
+
+    existingRecords.forEach(r => {
+      if (r.school_monitoring_id) {
+        const cleanId = r.school_monitoring_id.trim().toUpperCase();
+        existingIdSet.add(cleanId);
+
+        const match = cleanId.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      }
+    });
+
+    let nextNum = Math.max(maxNum + 1, 1);
+    let candidate = `ARAL-IMS-${currentYear}-${String(nextNum).padStart(4, '0')}`;
+    while (existingIdSet.has(candidate.toUpperCase())) {
+      nextNum++;
+      candidate = `ARAL-IMS-${currentYear}-${String(nextNum).padStart(4, '0')}`;
+    }
+    return candidate;
   };
 
   // Handle Open Create Form
@@ -1162,8 +1301,60 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       return;
     }
 
+    const finalSchoolMonitoringId = schoolMonitoringId.trim();
+    if (!finalSchoolMonitoringId) {
+      showError('Form invalid', 'School Monitoring ID is required. Please provide an ID or click Auto-generate.');
+      return;
+    }
+
+    // Check duplicate in local records
+    const conflictingLocalRecord = records.find(r => {
+      if (editingRecord && r.id === editingRecord.id) return false;
+      return (
+        r.school_monitoring_id &&
+        r.school_monitoring_id.trim().toLowerCase() === finalSchoolMonitoringId.toLowerCase()
+      );
+    });
+
+    if (conflictingLocalRecord) {
+      showError(
+        'Duplicate ID Blocked',
+        `School Monitoring ID "${finalSchoolMonitoringId}" is already assigned to "${conflictingLocalRecord.school_name}". Please use a unique ID.`
+      );
+      return;
+    }
+
     setSaving(true);
     try {
+      // Check database for existing duplicate ID if Supabase is configured
+      if (isSupabaseConfigured) {
+        try {
+          const { data: dbConflicts } = await supabase
+            .from('school_monitoring')
+            .select('id, customer_code, school_name, school_monitoring_id')
+            .ilike('school_monitoring_id', finalSchoolMonitoringId);
+
+          if (dbConflicts && dbConflicts.length > 0) {
+            const isSelf = editingRecord && dbConflicts.some(row => 
+              row.id === editingRecord.id || 
+              (editingRecord.customer_code && row.customer_code === editingRecord.customer_code)
+            );
+
+            if (!isSelf) {
+              const conflictSchool = dbConflicts[0].school_name || 'another school';
+              showError(
+                'Duplicate ID Blocked',
+                `School Monitoring ID "${finalSchoolMonitoringId}" already exists in the database for "${conflictSchool}". Duplicate IDs cannot be saved.`
+              );
+              setSaving(false);
+              return;
+            }
+          }
+        } catch (dbCheckErr) {
+          console.warn('DB uniqueness check warning:', dbCheckErr);
+        }
+      }
+
       const finalCustomerCode = customerCode.trim() || ('CUST-' + selectedSchoolName.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 10));
       let updatedRecs: SchoolMonitoringRecord[] = [];
       const today = getTodayString();
@@ -1191,7 +1382,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
               status: currentStatus,
               status_dates: finalStatusDates,
               items: formItems,
-              school_monitoring_id: schoolMonitoringId,
+              school_monitoring_id: finalSchoolMonitoringId,
               type_of_document: typeOfDocument,
               updated_at: new Date().toISOString()
             };
@@ -1213,7 +1404,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           status: currentStatus,
           status_dates: finalStatusDates,
           items: formItems,
-          school_monitoring_id: schoolMonitoringId,
+          school_monitoring_id: finalSchoolMonitoringId,
           type_of_document: typeOfDocument,
           created_at: new Date().toISOString()
         };
@@ -1228,7 +1419,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
       console.error(err);
       const msg = err.message || '';
       if (msg.includes('duplicate key') || msg.includes('unique constraint')) {
-        showError('Duplicate Code', 'A record with this Customer Code already exists');
+        showError('Duplicate Record', 'A record with this Customer Code or School Monitoring ID already exists.');
       } else {
         showError('Failed to save', msg || 'Could not sync monitoring metadata changes');
       }
@@ -1310,13 +1501,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
 
   const exportToExcel = () => {
     const STATUS_LABELS: Record<number, string> = {
-      1: 'PO Creation',
-      2: 'Cataloguing',
-      3: 'Dispatching',
-      4: 'In-Transit',
-      5: 'Delivered',
-      6: 'Installation',
-      7: 'User Training'
+      1: 'Received Initial document',
+      2: 'Received Latest document',
+      3: 'Creation of item request',
+      4: 'Item Received',
+      5: 'Preparing Item',
+      6: 'In transit',
+      7: 'Delivered'
     };
 
     const headers = [
@@ -1386,13 +1577,15 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           </h1>
         </div>
         
-        <button
-          onClick={openCreateForm}
-          className="px-4 py-2 bg-brand-orange text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 self-start md:self-auto cursor-pointer"
-        >
-          <Plus size={15} strokeWidth={3} />
-          Monitor New School
-        </button>
+        {userRole !== 'Staff' && (
+          <button
+            onClick={openCreateForm}
+            className="px-4 py-2 bg-brand-orange text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 self-start md:self-auto cursor-pointer"
+          >
+            <Plus size={15} strokeWidth={3} />
+            Monitor New School
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -1657,11 +1850,15 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                             className="px-5 py-4 min-w-[200px]" 
                             onClick={(e) => {
                               e.stopPropagation();
+                              if (userRole === 'Staff') return;
                               openStatusEditModal(record);
                             }}
                           >
-                            <div className="flex items-center gap-2 group/status cursor-pointer animate-fade-in" title="Click to view/update full interactive timeline">
-                              <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wider bg-brand-orange/10 text-brand-orange border border-indigo-500/10 hover:bg-brand-orange hover:text-white transition-all shadow-xs group-hover/status:scale-102">
+                            <div 
+                              className={`flex items-center gap-2 ${userRole === 'Staff' ? 'cursor-default opacity-85' : 'group/status cursor-pointer'} animate-fade-in`} 
+                              title={userRole === 'Staff' ? "Status modification disabled for Staff role" : "Click to view/update full interactive timeline"}
+                            >
+                              <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wider bg-brand-orange/10 text-brand-orange border border-indigo-500/10 ${userRole === 'Staff' ? '' : 'hover:bg-brand-orange hover:text-white transition-all shadow-xs group-hover/status:scale-102'}`}>
                                 <span className="w-5.5 h-5.5 rounded-full bg-brand-orange text-white flex items-center justify-center text-[10px] font-black shadow-xs">
                                   {record.status}
                                 </span>
@@ -1675,21 +1872,38 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                           {/* Action cell */}
                           <td className="px-5 py-4 text-center" onClick={(e) => e.stopPropagation()}>
                             <div className="flex items-center justify-center gap-1.5">
+                              {userRole !== 'Staff' ? (
+                                <>
+                                  <button
+                                    onClick={(e) => openEditForm(record, e)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-500/15 transition-all cursor-pointer"
+                                    title="Edit parameters"
+                                  >
+                                    <Edit3 size={13} />
+                                  </button>
+                                  <button
+                                    onClick={(e) => handleDeleteRecord(record.id, e)}
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/15 transition-all cursor-pointer"
+                                    title="Remove and archive"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  disabled
+                                  className="p-1.5 rounded-lg text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40"
+                                  title="Actions disabled for Staff role"
+                                >
+                                  <Edit3 size={13} />
+                                </button>
+                              )}
                               <button
-                                onClick={(e) => openEditForm(record, e)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-500/15 transition-all"
-                                title="Edit parameters"
+                                onClick={() => setSelectedRecordId(isSelected ? null : record.id)}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-brand-orange transition-all cursor-pointer"
                               >
-                                <Edit3 size={13} />
+                                {isSelected ? <ChevronUp size={14} className="text-brand-orange" /> : <ChevronDown size={14} className="text-slate-400" />}
                               </button>
-                              <button
-                                onClick={(e) => handleDeleteRecord(record.id, e)}
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/15 transition-all"
-                                title="Remove and archive"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                              {isSelected ? <ChevronUp size={14} className="text-brand-orange" /> : <ChevronDown size={14} className="text-slate-400" />}
                             </div>
                           </td>
                         </tr>
@@ -1766,6 +1980,16 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                                             }`}>
                                               {stepDate ? formatStepDate(stepDate) : 'Not Reached'}
                                             </div>
+
+                                            {col.step === 4 && (record.item_received_status || (stepActive && stepDate)) && (
+                                              <span className={`mt-1.5 px-2 py-0.5 text-[8px] font-black uppercase rounded-full tracking-wider leading-none ${
+                                                record.item_received_status === 'Delivered' 
+                                                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' 
+                                                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                                              }`}>
+                                                {record.item_received_status || 'Partial'}
+                                              </span>
+                                            )}
                                           </div>
                                         );
                                       })}
@@ -2139,21 +2363,61 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                     {/* School Monitoring ID */}
                     <div className="flex flex-col gap-1">
-                      <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide opacity-80">School Monitoring ID</label>
-                      <input
-                        type="text"
-                        placeholder="Auto-generated"
-                        value={schoolMonitoringId}
-                        disabled
-                        className="w-full border border-slate-155 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 p-2 text-sm text-slate-500 font-mono font-bold rounded-lg focus:outline-none"
-                      />
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide">School Monitoring ID</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const freshId = generateSchoolMonitoringId(records);
+                            setSchoolMonitoringId(freshId);
+                          }}
+                          className="text-[10px] font-extrabold text-brand-orange hover:text-orange-600 flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Generate a new unique automated ID"
+                        >
+                          <RefreshCw size={11} className="transition-transform active:rotate-180" />
+                          <span>Auto-generate</span>
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="e.g. ARAL-IMS-2026-0001"
+                          value={schoolMonitoringId}
+                          onChange={(e) => setSchoolMonitoringId(e.target.value.toUpperCase())}
+                          className={`w-full border p-2 text-sm font-mono font-bold rounded-lg focus:outline-none transition-all ${
+                            duplicateIdRecord
+                              ? 'border-red-500 bg-red-50/40 dark:bg-red-950/20 text-red-600 dark:text-red-400 ring-1 ring-red-500/30'
+                              : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-white focus:border-brand-orange'
+                          }`}
+                        />
+                        {duplicateIdRecord && (
+                          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-red-500 pointer-events-none">
+                            <AlertCircle size={16} />
+                          </div>
+                        )}
+                      </div>
+                      {duplicateIdRecord ? (
+                        <p className="text-[10.5px] font-bold text-red-500 flex items-center gap-1 mt-0.5 animate-in fade-in">
+                          <AlertCircle size={11} className="shrink-0" />
+                          <span>ID already in use by "{duplicateIdRecord.school_name}". Must be unique.</span>
+                        </p>
+                      ) : schoolMonitoringId.trim() ? (
+                        <p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-0.5">
+                          <CheckCircle2 size={11} className="shrink-0" />
+                          <span>Automated ID (editable) &bull; Unique</span>
+                        </p>
+                      ) : (
+                        <p className="text-[10px] font-medium text-slate-400 mt-0.5">
+                          Enter custom ID or click Auto-generate
+                        </p>
+                      )}
                     </div>
 
                     {/* Type of Document */}
                     <div className="flex flex-col gap-1">
                       <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Type of Document</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {['MOA', 'Addendum', 'AQL'].map((docType) => {
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {['MOA', 'Addendum', 'AQL', 'IR'].map((docType) => {
                           const isSelected = typeOfDocument === docType;
                           return (
                             <button
@@ -2492,7 +2756,21 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                 {formStep < 2 ? (
                   <button
                     type="button"
-                    onClick={() => setFormStep(prev => prev + 1)}
+                    onClick={() => {
+                      if (!selectedSchoolName) {
+                        showError('Form invalid', 'Please select a School name');
+                        return;
+                      }
+                      if (!schoolMonitoringId.trim()) {
+                        showError('Form invalid', 'Please provide or auto-generate a School Monitoring ID');
+                        return;
+                      }
+                      if (duplicateIdRecord) {
+                        showError('Duplicate ID', `School Monitoring ID "${schoolMonitoringId}" is already in use by "${duplicateIdRecord.school_name}". Please use a unique ID.`);
+                        return;
+                      }
+                      setFormStep(prev => prev + 1);
+                    }}
                     className="px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-slate-750 hover:opacity-90 transition-all cursor-pointer"
                   >
                     Next Step
@@ -2501,8 +2779,12 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                   <button
                     type="button"
                     onClick={handleSaveRecord}
-                    disabled={saving}
-                    className="px-5 py-2 bg-brand-orange text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:opacity-90 transition-all flex items-center gap-1.5 cursor-pointer"
+                    disabled={saving || Boolean(duplicateIdRecord)}
+                    className={`px-5 py-2 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+                      duplicateIdRecord || saving
+                        ? 'bg-slate-400 opacity-60 cursor-not-allowed'
+                        : 'bg-brand-orange hover:opacity-90 cursor-pointer'
+                    }`}
                   >
                     {saving ? (
                       <>
@@ -2836,7 +3118,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                         }
                       })();
 
-                      const isAutomated = st.step === 3 || st.step === 6 || st.step === 7;
+                      const isAutomated = st.step === 3 || st.step === 4 || st.step === 6 || st.step === 7;
 
                       return (
                         <div 
@@ -2914,6 +3196,16 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                           }`}>
                             {stepDate ? formatStepDate(stepDate) : 'Not Reached'}
                           </div>
+
+                          {st.step === 4 && (activeStatusEditRecord?.item_received_status || (isActive && stepDate)) && (
+                            <span className={`mt-1 px-1.5 py-0.5 text-[8px] font-black uppercase rounded-full tracking-wider ${
+                              activeStatusEditRecord?.item_received_status === 'Delivered' 
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' 
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30'
+                            }`}>
+                              {activeStatusEditRecord?.item_received_status || 'Partial'}
+                            </span>
+                          )}
                         </div>
                       );
                     })}
@@ -2935,7 +3227,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                       const updatedDates = { ...modalStatusDates };
                       const today = getTodayString();
                       for (let i = 1; i <= modalStatus; i++) {
-                        if (i === 3 || i === 6 || i === 7) continue; // Skip automated steps
+                        if (i === 3 || i === 4 || i === 6 || i === 7) continue; // Skip automated steps
                         if (!updatedDates[i]) updatedDates[i] = today;
                       }
                       setModalStatusDates(updatedDates);
@@ -2950,7 +3242,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3.5">
                   {STATUS_STEPS.map((col) => {
                     const isReached = col.step <= modalStatus;
-                    const isAutomated = col.step === 3 || col.step === 6 || col.step === 7;
+                    const isAutomated = col.step === 3 || col.step === 4 || col.step === 6 || col.step === 7;
                     return (
                       <div 
                         key={col.step} 
@@ -3058,13 +3350,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean }> = ({ isDarkMod
           <tbody className="divide-y divide-slate-200">
             {filteredRecords.map((r) => {
               const STATUS_LABELS: Record<number, string> = {
-                1: 'PO Creation',
-                2: 'Cataloguing',
-                3: 'Dispatching',
-                4: 'In-Transit',
-                5: 'Delivered',
-                6: 'Installation',
-                7: 'User Training'
+                1: 'Received Initial document',
+                2: 'Received Latest document',
+                3: 'Creation of item request',
+                4: 'Item Received',
+                5: 'Preparing Item',
+                6: 'In transit',
+                7: 'Delivered'
               };
               const statusLabel = STATUS_LABELS[r.status] || `Stage ${r.status}`;
               const assetsList = r.items && r.items.length > 0

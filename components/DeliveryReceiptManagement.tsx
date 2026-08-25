@@ -35,7 +35,8 @@ import {
   History,
   PenTool,
   CheckSquare,
-  XCircle
+  XCircle,
+  Sparkles
 } from 'lucide-react';
 import PageHeader from './PageHeader';
 import { useNotification } from './NotificationProvider';
@@ -197,9 +198,13 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
 
 interface DeliveryReceiptManagementProps {
   isDarkMode?: boolean;
+  userRole?: string | null;
 }
 
-const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ isDarkMode = false }) => {
+const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ 
+  isDarkMode = false,
+  userRole = localStorage.getItem('aralinks_role') || 'Staff'
+}) => {
   const navigate = useNavigate();
   const { showInfo, showSuccess, showWarning } = useNotification();
 
@@ -213,6 +218,7 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
 
   // Selected DR for detail slideover
   const [selectedDR, setSelectedDR] = useState<DeliveryReceipt | null>(null);
+  const [detailActivePageTab, setDetailActivePageTab] = useState<number | 'all'>('all');
 
   // Equipment list for checking serialization status of items
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
@@ -443,6 +449,143 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
     }
 
     return ranges.join(', ');
+  };
+
+  // Helper interface and function to partition hardware items into multiple pages for ACE bundle printing
+  interface ACEPrintPage {
+    pageNumber: number;
+    totalPages: number;
+    groupKey: 'arduino' | 'raspberry' | 'toolkit_group' | 'general';
+    groupLabel: string;
+    badgeColor: string;
+    items: any[];
+  }
+
+  const getAcePrintPages = (itemsList: any[]): ACEPrintPage[] => {
+    if (!itemsList || itemsList.length === 0) {
+      return [{
+        pageNumber: 1,
+        totalPages: 1,
+        groupKey: 'general',
+        groupLabel: 'Hardware Items',
+        badgeColor: '#64748b',
+        items: []
+      }];
+    }
+
+    const isAceReceipt = selectedDR?.project === 'ARALINKS ACE' || selectedDR?.project === 'ACE' ||
+      itemsList.some(item => {
+        const b = (item.bundle_name || item.bundle || item.remarks || '').toUpperCase();
+        return b.includes('ARDUINO') || b.includes('RASPBERRY') || b.includes('LITTLE BITS') || 
+               b.includes('MICRO:BIT') || b.includes('MAKEY-MAKEY') || b.includes('AF TOOLS') || b.includes('TOOL');
+      });
+
+    if (!isAceReceipt) {
+      return [{
+        pageNumber: 1,
+        totalPages: 1,
+        groupKey: 'general',
+        groupLabel: 'Hardware Items',
+        badgeColor: '#64748b',
+        items: itemsList
+      }];
+    }
+
+    const arduinoItems: any[] = [];
+    const raspberryItems: any[] = [];
+    const toolkitGroupItems: any[] = [];
+    const otherItems: any[] = [];
+
+    itemsList.forEach((item) => {
+      const bundleStr = ((item.bundle_name || item.bundle || '') + ' ' + (item.remarks || '') + ' ' + (item.description || '')).toUpperCase();
+      
+      if (bundleStr.includes('ARDUINO')) {
+        arduinoItems.push(item);
+      } else if (bundleStr.includes('RASPBERRY')) {
+        raspberryItems.push(item);
+      } else if (
+        bundleStr.includes('LITTLE BITS') ||
+        bundleStr.includes('LITTLEBITS') ||
+        bundleStr.includes('MICRO:BIT') ||
+        bundleStr.includes('MICROBIT') ||
+        bundleStr.includes('MAKEY-MAKEY') ||
+        bundleStr.includes('MAKEY MAKEY') ||
+        bundleStr.includes('MAKEYMAKEY') ||
+        bundleStr.includes('AF TOOLS') ||
+        bundleStr.includes('AF TOOL') ||
+        bundleStr.includes('TOOLKIT')
+      ) {
+        toolkitGroupItems.push(item);
+      } else {
+        otherItems.push(item);
+      }
+    });
+
+    const activeGroups: {
+      groupKey: 'arduino' | 'raspberry' | 'toolkit_group' | 'general';
+      groupLabel: string;
+      badgeColor: string;
+      items: any[];
+    }[] = [];
+
+    if (arduinoItems.length > 0) {
+      activeGroups.push({
+        groupKey: 'arduino',
+        groupLabel: 'Arduino Bundle',
+        badgeColor: '#00979D',
+        items: arduinoItems
+      });
+    }
+
+    if (raspberryItems.length > 0) {
+      activeGroups.push({
+        groupKey: 'raspberry',
+        groupLabel: 'Raspberry Pi Bundle',
+        badgeColor: '#C51A4A',
+        items: raspberryItems
+      });
+    }
+
+    if (toolkitGroupItems.length > 0) {
+      activeGroups.push({
+        groupKey: 'toolkit_group',
+        groupLabel: 'Toolkits (Little Bits, Micro:Bit, Makey-Makey & AF Tools)',
+        badgeColor: '#F58220',
+        items: toolkitGroupItems
+      });
+    }
+
+    if (otherItems.length > 0) {
+      if (activeGroups.length === 0) {
+        activeGroups.push({
+          groupKey: 'general',
+          groupLabel: 'Hardware Items',
+          badgeColor: '#64748b',
+          items: otherItems
+        });
+      } else {
+        toolkitGroupItems.push(...otherItems);
+      }
+    }
+
+    if (activeGroups.length === 0) {
+      activeGroups.push({
+        groupKey: 'general',
+        groupLabel: 'Hardware Items',
+        badgeColor: '#64748b',
+        items: itemsList
+      });
+    }
+
+    const totalPages = activeGroups.length;
+    return activeGroups.map((grp, index) => ({
+      pageNumber: index + 1,
+      totalPages,
+      groupKey: grp.groupKey,
+      groupLabel: grp.groupLabel,
+      badgeColor: grp.badgeColor,
+      items: grp.items
+    }));
   };
 
   // Handle Create DR Route Trigger
@@ -1184,17 +1327,19 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                 Export
               </button>
               
-              <button
-                onClick={handleCreateDR}
-                className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
-                style={{
-                  backgroundColor: 'var(--brand-accent)',
-                  boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
-                }}
-              >
-                <Plus size={16} strokeWidth={2.5} />
-                Create Delivery Receipt
-              </button>
+              {userRole !== 'Staff' && (
+                <button
+                  onClick={handleCreateDR}
+                  className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white shadow-lg active:scale-95 flex items-center gap-2 cursor-pointer transition-all hover:opacity-90"
+                  style={{
+                    backgroundColor: 'var(--brand-accent)',
+                    boxShadow: '0 4px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 60%)'
+                  }}
+                >
+                  <Plus size={16} strokeWidth={2.5} />
+                  Create Delivery Receipt
+                </button>
+              )}
             </div>
           }
         />
@@ -1433,7 +1578,7 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                         </button>
 
                         {/* Target Delivery Date Action Button */}
-                        {dr.status === 'Ready for delivery' && (
+                        {userRole !== 'Staff' && dr.status === 'Ready for delivery' && (
                           <button
                             onClick={() => {
                               setSelectedDRForTargetDate(dr);
@@ -1451,7 +1596,7 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                         )}
 
                         {/* Ready for delivery or In Transit -> display button to change/update In Transit date */}
-                        {(dr.status === 'Ready for delivery' || dr.status === 'In Transit') && (
+                        {userRole !== 'Staff' && (dr.status === 'Ready for delivery' || dr.status === 'In Transit') && (
                           <button
                             onClick={() => handleChangeStatus(dr.id, 'In Transit')}
                             className={`h-8 w-8 rounded-xl border transition-all hover:scale-105 cursor-pointer flex items-center justify-center shrink-0 ${
@@ -1470,7 +1615,7 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
                         )}
 
                         {/* In Transit or Partially Delivered -> display icon status for mark as delivered */}
-                        {(dr.status === 'In Transit' || dr.status === 'Partially Delivered') && (
+                        {userRole !== 'Staff' && (dr.status === 'In Transit' || dr.status === 'Partially Delivered') && (
                           <button
                             onClick={() => handleChangeStatus(dr.id, 'Delivered')}
                             className={`h-8 w-8 rounded-xl border transition-all hover:scale-105 cursor-pointer flex items-center justify-center shrink-0 ${
@@ -1518,32 +1663,37 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
 
                         {/* Edit button */}
                         <button
-                          onClick={() => handleEditDR(dr.id)}
-                          disabled={dr.status === 'Delivered' || dr.status === 'Partially Delivered'}
-                          className={`h-8 w-8 rounded-xl border transition-all hover:scale-105 flex items-center justify-center shrink-0 ${
-                            dr.status === 'Delivered' || dr.status === 'Partially Delivered'
+                          onClick={() => {
+                            if (userRole === 'Staff') return;
+                            handleEditDR(dr.id);
+                          }}
+                          disabled={userRole === 'Staff' || dr.status === 'Delivered' || dr.status === 'Partially Delivered'}
+                          className={`h-8 w-8 rounded-xl border transition-all flex items-center justify-center shrink-0 ${
+                            userRole === 'Staff' || dr.status === 'Delivered' || dr.status === 'Partially Delivered'
                               ? 'opacity-40 cursor-not-allowed border-transparent text-slate-400'
                               : isDarkMode 
-                                ? 'bg-slate-950 border-slate-800 text-slate-350 hover:text-blue-400 hover:bg-slate-800 cursor-pointer' 
-                                : 'bg-white border-slate-150 text-slate-600 hover:text-blue-500 hover:bg-slate-50 cursor-pointer'
+                                ? 'bg-slate-950 border-slate-800 text-slate-350 hover:text-blue-400 hover:bg-slate-800 hover:scale-105 cursor-pointer' 
+                                : 'bg-white border-slate-150 text-slate-600 hover:text-blue-500 hover:bg-slate-50 hover:scale-105 cursor-pointer'
                           }`}
-                          title={dr.status === 'Delivered' || dr.status === 'Partially Delivered' ? "Cannot edit processed deliveries" : "Edit template"}
+                          title={userRole === 'Staff' ? "Action disabled for Staff role" : dr.status === 'Delivered' || dr.status === 'Partially Delivered' ? "Cannot edit processed deliveries" : "Edit template"}
                         >
                           <Edit3 size={15} />
                         </button>
 
                         {/* Delete button */}
-                        <button
-                          onClick={() => handleDeleteDR(dr.id)}
-                          className={`h-8 w-8 rounded-xl border transition-all hover:scale-105 cursor-pointer flex items-center justify-center shrink-0 ${
-                            isDarkMode 
-                              ? 'bg-slate-950 border-slate-805 text-slate-400 hover:text-red-500 hover:bg-red-500/10' 
-                              : 'bg-white border-slate-150 text-slate-405 hover:text-red-550 hover:bg-red-50/80'
-                          }`}
-                          title="Delete"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        {userRole !== 'Staff' && (
+                          <button
+                            onClick={() => handleDeleteDR(dr.id)}
+                            className={`h-8 w-8 rounded-xl border transition-all hover:scale-105 cursor-pointer flex items-center justify-center shrink-0 ${
+                              isDarkMode 
+                                ? 'bg-slate-950 border-slate-805 text-slate-400 hover:text-red-500 hover:bg-red-500/10' 
+                                : 'bg-white border-slate-150 text-slate-405 hover:text-red-550 hover:bg-red-50/80'
+                            }`}
+                            title="Delete"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1618,311 +1768,386 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({ i
               {/* Scrollable Receipt Form Sheet Body */}
               <div className="flex-grow overflow-y-auto p-4 md:p-6 bg-slate-100 dark:bg-slate-950 custom-scrollbar print:p-0 print:bg-white space-y-4">
                 
-                {/* Paper sheet */}
-                <div className="border border-slate-200 dark:border-slate-800 bg-white text-zinc-900 p-6 md:p-8 shadow-md rounded-2xl relative select-none print:shadow-none print:border-none print:p-0 max-w-3xl mx-auto font-sans">
-                  
-                  {/* Header Branded Logo Section */}
-                  <div className="flex items-center justify-center mb-1 pb-1">
-                    <img 
-                      src="https://www.phoenix.com.ph/wp-content/uploads/2026/06/Screenshot-2026-06-04-093703.png"
-                      alt="Phoenix Publishing House Logo Header"
-                      className="w-full object-contain max-h-[85px]"
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-
-                  {/* Document Title & Top Right Date Blocks */}
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2.5">
-                    <div className="w-full sm:w-1/4" />
-                    <div className="w-full sm:w-2/4 text-center">
-                      <h2 className="text-[14px] font-black tracking-widest text-zinc-900 uppercase font-sans">
-                        DELIVERY ACCEPTANCE
-                      </h2>
+                {/* Multi-Bundle Page Selector Tabs (Only shown when multiple ACE bundle pages exist) */}
+                {(() => {
+                  const itemsList = selectedDR.hardwareItems || selectedDR.items || [];
+                  const acePages = getAcePrintPages(itemsList);
+                  if (acePages.length <= 1) return null;
+                  return (
+                    <div className="max-w-3xl mx-auto mb-3 p-3 rounded-2xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5 print:hidden shadow-xs">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={15} className="text-brand-orange" />
+                        <div>
+                          <h3 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-white">
+                            ACE Bundle Pagination ({acePages.length} Pages)
+                          </h3>
+                          <p className="text-[10px] text-slate-400">
+                            Arduino & Raspberry separated; Toolkits grouped
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setDetailActivePageTab('all')}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                            detailActivePageTab === 'all'
+                              ? 'bg-brand-orange text-white shadow-xs'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          All ({acePages.length})
+                        </button>
+                        {acePages.map((page) => (
+                          <button
+                            key={page.pageNumber}
+                            type="button"
+                            onClick={() => setDetailActivePageTab(page.pageNumber)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1.5 ${
+                              detailActivePageTab === page.pageNumber
+                                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-xs'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                            }`}
+                          >
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: page.badgeColor }} />
+                            <span>Page {page.pageNumber}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                  );
+                })()}
 
-                    {/* Box container for Date and DR No. matching paper sketch */}
-                    <div className="w-full sm:w-1/4 flex justify-center sm:justify-end">
-                      <div className="border border-zinc-500 rounded-sm overflow-hidden shrink-0 text-center text-[10px] w-[165px] leading-tight bg-white">
-                        <div className="border-b border-zinc-500 p-1 flex items-center justify-between px-2 bg-zinc-50">
-                          <span className="font-bold text-zinc-500 uppercase">Date:</span>
-                          <span className="font-mono font-bold text-zinc-800">
-                            {selectedDR.date ? new Date(selectedDR.date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '--/--/----'}
-                          </span>
+                {/* Render Pages */}
+                {(() => {
+                  const itemsList = selectedDR.hardwareItems || selectedDR.items || [];
+                  const acePages = getAcePrintPages(itemsList);
+                  return acePages.map((page, pageIdx) => {
+                    const isVisibleOnScreen = detailActivePageTab === 'all' || detailActivePageTab === page.pageNumber;
+                    return (
+                      <div
+                        key={`detail-ace-page-${page.pageNumber}`}
+                        className={`border border-slate-200 dark:border-slate-800 bg-white text-zinc-900 p-6 md:p-8 shadow-md rounded-2xl relative select-none print:shadow-none print:border-none print:p-0 max-w-3xl mx-auto font-sans mb-6 print:mb-0 print:block ${
+                          isVisibleOnScreen ? 'block' : 'hidden'
+                        }`}
+                        style={{
+                          breakAfter: pageIdx < acePages.length - 1 ? 'page' : 'auto',
+                          pageBreakAfter: pageIdx < acePages.length - 1 ? 'always' : 'auto'
+                        }}
+                      >
+                        {/* Header Branded Logo Section */}
+                        <div className="flex items-center justify-center mb-1 pb-1">
+                          <img 
+                            src="https://www.phoenix.com.ph/wp-content/uploads/2026/06/Screenshot-2026-06-04-093703.png"
+                            alt="Phoenix Publishing House Logo Header"
+                            className="w-full object-contain max-h-[85px]"
+                            referrerPolicy="no-referrer"
+                          />
                         </div>
-                        <div className="p-1 flex items-center justify-between px-2 bg-zinc-100/50">
-                          <span className="font-bold text-zinc-500 uppercase">DR No.</span>
-                          <span className="font-mono font-bold text-zinc-900 tracking-wider">
-                            {selectedDR.id}
-                          </span>
+
+                        {/* Document Title & Top Right Date Blocks */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-2.5">
+                          <div className="w-full sm:w-1/4 flex items-center">
+                            {acePages.length > 1 && (
+                              <span 
+                                className="px-2 py-0.5 rounded text-[8.5px] font-black uppercase tracking-wider text-white print:hidden"
+                                style={{ backgroundColor: page.badgeColor }}
+                              >
+                                {page.groupLabel}
+                              </span>
+                            )}
+                          </div>
+                          <div className="w-full sm:w-2/4 text-center">
+                            <h2 className="text-[14px] font-black tracking-widest text-zinc-900 uppercase font-sans">
+                              DELIVERY ACCEPTANCE
+                            </h2>
+                          </div>
+
+                          {/* Box container for Date and DR No. matching paper sketch */}
+                          <div className="w-full sm:w-1/4 flex justify-center sm:justify-end">
+                            <div className="border border-zinc-500 rounded-sm overflow-hidden shrink-0 text-center text-[10px] w-[165px] leading-tight bg-white">
+                              <div className="border-b border-zinc-500 p-1 flex items-center justify-between px-2 bg-zinc-50">
+                                <span className="font-bold text-zinc-500 uppercase">Date:</span>
+                                <span className="font-mono font-bold text-zinc-800">
+                                  {selectedDR.date ? new Date(selectedDR.date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }) : '--/--/----'}
+                                </span>
+                              </div>
+                              <div className="p-1 flex items-center justify-between px-2 bg-zinc-100/50">
+                                <span className="font-bold text-zinc-500 uppercase">DR No.</span>
+                                <span className="font-mono font-bold text-zinc-900 tracking-wider">
+                                  {selectedDR.id}
+                                </span>
+                              </div>
+                              {(selectedDR as any).targetDeliveryDate && (
+                                <div className="p-1 flex items-center justify-between px-2 bg-amber-50/70 border-t border-zinc-400">
+                                  <span className="font-bold text-amber-700 uppercase">Target:</span>
+                                  <span className="font-mono font-bold text-amber-800">
+                                    {new Date((selectedDR as any).targetDeliveryDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        {(selectedDR as any).targetDeliveryDate && (
-                          <div className="p-1 flex items-center justify-between px-2 bg-amber-50/70 border-t border-zinc-400">
-                            <span className="font-bold text-amber-700 uppercase">Target:</span>
-                            <span className="font-mono font-bold text-amber-800">
-                              {new Date((selectedDR as any).targetDeliveryDate).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
+
+                        {/* Client information fields grid */}
+                        <div className="grid grid-cols-12 gap-y-2 text-[10px] text-left mt-4 pb-4 border-b border-zinc-300">
+                          
+                          <div className="col-span-12 sm:col-span-7 flex flex-col pr-0 sm:pr-4 justify-end text-left">
+                            <div className="flex items-end">
+                              <span className="w-24 shrink-0 font-bold text-zinc-700">Delivered to</span>
+                              <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                              <span className="font-black text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
+                                {selectedDR.schoolName}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="col-span-12 sm:col-span-5 flex items-end">
+                            <span className="w-20 shrink-0 font-bold text-zinc-700">Client Code</span>
+                            <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                            <span className="font-mono font-bold text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                              {selectedDR.clientCode || 'C00000231(GS)'}
                             </span>
                           </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
 
-                  {/* Client information fields grid */}
-                  <div className="grid grid-cols-12 gap-y-2 text-[10px] text-left mt-4 pb-4 border-b border-zinc-300">
-                    
-                    <div className="col-span-12 sm:col-span-7 flex flex-col pr-0 sm:pr-4 justify-end text-left">
-                      <div className="flex items-end">
-                        <span className="w-24 shrink-0 font-bold text-zinc-700">Delivered to</span>
-                        <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                        <span className="font-black text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
-                          {selectedDR.schoolName}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="col-span-12 sm:col-span-5 flex items-end">
-                      <span className="w-20 shrink-0 font-bold text-zinc-700">Client Code</span>
-                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                      <span className="font-mono font-bold text-zinc-900 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                        {selectedDR.clientCode || 'C00000231(GS)'}
-                      </span>
-                    </div>
+                          <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
+                            <span className="w-24 shrink-0 font-bold text-zinc-700">Address</span>
+                            <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                            <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
+                              {selectedDR.address || 'ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN'}
+                            </span>
+                          </div>
+                          <div className="col-span-12 sm:col-span-5 flex items-end">
+                            <span className="w-20 shrink-0 font-bold text-zinc-700">Agent</span>
+                            <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                            <span className="font-semibold text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                              {selectedDR.agent || 'Team Gina'}
+                            </span>
+                          </div>
 
-                    <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
-                      <span className="w-24 shrink-0 font-bold text-zinc-700">Address</span>
-                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                      <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 truncate pl-1">
-                        {selectedDR.address || 'ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN'}
-                      </span>
-                    </div>
-                    <div className="col-span-12 sm:col-span-5 flex items-end">
-                      <span className="w-20 shrink-0 font-bold text-zinc-700">Agent</span>
-                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                      <span className="font-semibold text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                        {selectedDR.agent || 'Team Gina'}
-                      </span>
-                    </div>
+                          <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
+                            <span className="w-24 shrink-0 font-bold text-zinc-700">Contact Person</span>
+                            <span className="font-semibold text-zinc-505 mr-1.5">:</span>
+                            <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
+                              {selectedDR.contactPerson || <span className="text-zinc-300">__________________________________________</span>}
+                            </span>
+                          </div>
+                          <div className="col-span-12 sm:col-span-5 flex items-end">
+                            <span className="w-20 shrink-0 font-bold text-zinc-700">Project</span>
+                            <span className="font-semibold text-zinc-500 mr-1.5">:</span>
+                            <span className="font-bold text-zinc-950 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
+                              {selectedDR.project}
+                            </span>
+                          </div>
 
-                    <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
-                      <span className="w-24 shrink-0 font-bold text-zinc-700">Contact Person</span>
-                      <span className="font-semibold text-zinc-505 mr-1.5">:</span>
-                      <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
-                        {selectedDR.contactPerson || <span className="text-zinc-300">__________________________________________</span>}
-                      </span>
-                    </div>
-                    <div className="col-span-12 sm:col-span-5 flex items-end">
-                      <span className="w-20 shrink-0 font-bold text-zinc-700">Project</span>
-                      <span className="font-semibold text-zinc-500 mr-1.5">:</span>
-                      <span className="font-bold text-zinc-950 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
-                        {selectedDR.project}
-                      </span>
-                    </div>
+                          <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
+                            <span className="w-24 shrink-0 font-bold text-zinc-700">Contact No.</span>
+                            <span className="font-semibold text-zinc-505 mr-1.5">:</span>
+                            <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
+                              {selectedDR.contactNo || <span className="text-zinc-300">__________________________________________</span>}
+                            </span>
+                          </div>
+                          <div className="col-span-12 sm:col-span-5 flex items-end">
+                            <span className="w-20 shrink-0 font-bold text-zinc-700">MOA</span>
+                            <span className="font-semibold text-zinc-505 mr-1.5">:</span>
+                            <span className="font-semibold text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
+                              {selectedDR.moa || 'S.Y. 2023 TO S.Y. 2024 TO S.Y. 2025-26'}
+                            </span>
+                          </div>
+                        </div>
 
-                    <div className="col-span-12 sm:col-span-7 flex items-end pr-0 sm:pr-4">
-                      <span className="w-24 shrink-0 font-bold text-zinc-700">Contact No.</span>
-                      <span className="font-semibold text-zinc-505 mr-1.5">:</span>
-                      <span className="font-medium text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1">
-                        {selectedDR.contactNo || <span className="text-zinc-300">__________________________________________</span>}
-                      </span>
-                    </div>
-                    <div className="col-span-12 sm:col-span-5 flex items-end">
-                      <span className="w-20 shrink-0 font-bold text-zinc-700">MOA</span>
-                      <span className="font-semibold text-zinc-505 mr-1.5">:</span>
-                      <span className="font-semibold text-zinc-800 border-b border-zinc-300 flex-grow pb-0.5 pl-1 truncate">
-                        {selectedDR.moa || 'S.Y. 2023 TO S.Y. 2024 TO S.Y. 2025-26'}
-                      </span>
-                    </div>
-                  </div>
+                        {/* HARDWARE ITEMS TABLE (Matches physical style closely) */}
+                        <div className="mt-4 text-[9.5px] text-left overflow-x-auto">
+                          <table className="w-full border-collapse border border-zinc-400 min-w-[500px]">
+                            <thead>
+                              <tr className="bg-zinc-100 text-[8.5px] font-black uppercase text-zinc-650 border-b border-zinc-400">
+                                <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Quantity</th>
+                                <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Unit</th>
+                                <th className="border-r border-zinc-400 px-3 py-1.5 text-left w-1/2">Description</th>
+                                <th className="border-r border-zinc-400 px-3 py-1.5 text-left">Specifications</th>
+                                <th className="px-3 py-1.5 text-left">Remarks</th>
+                              </tr>
+                            </thead>
+                            <tbody className="text-[9.5px]">
+                              {/* Category Indicator Row mimicking paper template */}
+                              <tr className="border-b border-zinc-300 font-bold text-zinc-850 bg-zinc-50/70">
+                                <td className="border-r border-zinc-300 py-1 text-center"></td>
+                                <td className="border-r border-zinc-300 py-1 text-center"></td>
+                                <td colSpan={3} className="px-3 py-1 font-black uppercase tracking-wider text-[8.5px] text-zinc-700">
+                                  Hardware {acePages.length > 1 ? `— ${page.groupLabel}` : ''}
+                                </td>
+                              </tr>
 
-                  {/* HARDWARE ITEMS TABLE (Matches physical style closely) */}
-                  <div className="mt-4 text-[9.5px] text-left overflow-x-auto">
-                    <table className="w-full border-collapse border border-zinc-400 min-w-[500px]">
-                      <thead>
-                        <tr className="bg-zinc-100 text-[8.5px] font-black uppercase text-zinc-650 border-b border-zinc-400">
-                          <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Quantity</th>
-                          <th className="border-r border-zinc-400 px-2.5 py-1.5 text-center w-14">Unit</th>
-                          <th className="border-r border-zinc-400 px-3 py-1.5 text-left w-1/2">Description</th>
-                          <th className="border-r border-zinc-400 px-3 py-1.5 text-left">Specifications</th>
-                          <th className="px-3 py-1.5 text-left">Remarks</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-[9.5px]">
-                        {/* Category Indicator Row mimicking paper template */}
-                        <tr className="border-b border-zinc-300 font-bold text-zinc-850 bg-zinc-50/70">
-                          <td className="border-r border-zinc-300 py-1 text-center"></td>
-                          <td className="border-r border-zinc-300 py-1 text-center"></td>
-                          <td colSpan={3} className="px-3 py-1 font-black uppercase tracking-wider text-[8.5px] text-zinc-700">
-                            Hardware
-                          </td>
-                        </tr>
+                              {page.items.map((hw: any, idx: number) => {
+                                const isCancelled = hw.deliveryStatus === 'Cancelled';
+                                return (
+                                  <tr key={hw.id || idx} className={`border-b border-zinc-200 transition-all ${isCancelled ? 'opacity-40 italic bg-zinc-50' : ''}`}>
+                                    <td className="border-r border-zinc-300 px-2.5 py-1 text-center font-bold font-mono text-zinc-800">
+                                      {isCancelled ? (
+                                        <span className="text-red-650 font-sans text-[7.5px] font-black uppercase tracking-wider block">CNCLD</span>
+                                      ) : (
+                                        hw.qty
+                                      )}
+                                    </td>
+                                    <td className={`border-r border-zinc-300 px-2.5 py-1 text-center text-zinc-500 font-sans ${isCancelled ? 'line-through text-zinc-400' : ''}`}>{hw.unit || hw.uom || 'PCS'}</td>
+                                    <td className={`border-r border-zinc-300 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.description}>
+                                      {hw.description || '------'}
+                                    </td>
+                                    <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>
+                                      {(() => {
+                                        const rowItemCode = hw.item_code || hw.itemCode;
+                                        const isSerialized = isSerializedItem(rowItemCode, hw.description);
+                                        const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
+                                        const serialsVal = hw.specifications || hw.serialNumber;
+                                        if ((isSerialized || isBundled) && serialsVal) {
+                                          return formatSerialRanges(serialsVal);
+                                        }
+                                        return serialsVal || '------';
+                                      })()}
+                                    </td>
+                                    <td className={`px-3 py-1 text-zinc-650 truncate max-w-[140px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.remarks}>
+                                      {(() => {
+                                        if (!hw.remarks) return '------';
+                                        const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
+                                        if (bName) {
+                                          const bColor = getBundleColor(bName);
+                                          if (bColor) {
+                                            return (
+                                              <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
+                                                {hw.remarks}
+                                              </span>
+                                            );
+                                          }
+                                        }
+                                        return hw.remarks;
+                                      })()}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {/* Fill empty lines up to 6 rows for that notepad look */}
+                              {Array.from({ length: Math.max(0, 6 - page.items.length) }).map((_, i) => (
+                                <tr key={`empty-hw-${page.pageNumber}-${i}`} className="h-[21px] border-b border-zinc-200">
+                                  <td className="border-r border-zinc-400"></td>
+                                  <td className="border-r border-zinc-400"></td>
+                                  <td className="border-r border-zinc-400"></td>
+                                  <td className="border-r border-zinc-400"></td>
+                                  <td></td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
 
-                        {(selectedDR.hardwareItems || selectedDR.items || []).map((hw: any, idx: number) => {
-                          const isCancelled = hw.deliveryStatus === 'Cancelled';
-                          return (
-                            <tr key={hw.id || idx} className={`border-b border-zinc-200 transition-all ${isCancelled ? 'opacity-40 italic bg-zinc-50' : ''}`}>
-                              <td className="border-r border-zinc-300 px-2.5 py-1 text-center font-bold font-mono text-zinc-800">
-                                {isCancelled ? (
-                                  <span className="text-red-650 font-sans text-[7.5px] font-black uppercase tracking-wider block">CNCLD</span>
-                                ) : (
-                                  hw.qty
-                                )}
-                              </td>
-                              <td className={`border-r border-zinc-300 px-2.5 py-1 text-center text-zinc-500 font-sans ${isCancelled ? 'line-through text-zinc-400' : ''}`}>{hw.unit || hw.uom || 'PCS'}</td>
-                              <td className={`border-r border-zinc-300 px-3 py-1 font-black text-zinc-900 truncate max-w-[210px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.description}>
-                                {hw.description || '------'}
-                              </td>
-                              <td className={`border-r border-zinc-300 px-3 py-1 font-mono text-[9px] text-zinc-500 truncate max-w-[150px] ${isCancelled ? 'line-through text-zinc-400 font-mono' : ''}`} title={hw.specifications || hw.serialNumber}>
-                                {(() => {
-                                  const rowItemCode = hw.item_code || hw.itemCode;
-                                  const isSerialized = isSerializedItem(rowItemCode, hw.description);
-                                  const isBundled = !!(hw.bundle_name || hw.bundle || (hw.remarks && hw.remarks.startsWith('Bundle: ')));
-                                  const serialsVal = hw.specifications || hw.serialNumber;
-                                  if ((isSerialized || isBundled) && serialsVal) {
-                                    return formatSerialRanges(serialsVal);
-                                  }
-                                  return serialsVal || '------';
-                                })()}
-                              </td>
-                              <td className={`px-3 py-1 text-zinc-650 truncate max-w-[140px] ${isCancelled ? 'line-through text-zinc-400' : ''}`} title={hw.remarks}>
-                                {(() => {
-                                  if (!hw.remarks) return '------';
-                                  const bName = hw.bundle_name || hw.bundle || (hw.remarks.startsWith('Bundle: ') ? hw.remarks.substring(8).trim() : '');
-                                  if (bName) {
-                                    const bColor = getBundleColor(bName);
-                                    if (bColor) {
-                                      return (
-                                        <span style={{ color: bColor.bg }} className="font-extrabold uppercase text-[9.5px]">
-                                          {hw.remarks}
-                                        </span>
-                                      );
-                                    }
-                                  }
-                                  return hw.remarks;
-                                })()}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                        {/* Fill empty lines up to 6 rows for that notepad look */}
-                        {Array.from({ length: Math.max(0, 6 - (selectedDR.hardwareItems || selectedDR.items || []).length) }).map((_, i) => (
-                          <tr key={`empty-hw-${i}`} className="h-[21px] border-b border-zinc-200">
-                            <td className="border-r border-zinc-400"></td>
-                            <td className="border-r border-zinc-400"></td>
-                            <td className="border-r border-zinc-400"></td>
-                            <td className="border-r border-zinc-400"></td>
-                            <td></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {/* Document Remarks/Footnotes */}
-                  {selectedDR.remarks && (
-                    <div className="mt-3.5 p-2 rounded border border-zinc-200 text-left text-[8.5px] leading-relaxed text-zinc-500 font-sans">
-                      <span className="font-extrabold text-[#FF6A00] uppercase block mb-0.5">Dispatcher / Routing Notes:</span>
-                      {selectedDR.remarks}
-                    </div>
-                  )}
-
-                  {/* SIGNATURE FIELDS AT THE BOTTOM (A high-fidelity 2x2 paper document signatory section) */}
-                  <div className="mt-6 pt-4 border-t border-zinc-300 grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-5 text-left leading-snug text-[10px]">
-                    
-                    {/* Row 1 Column 1: Prepared */}
-                    <div className="space-y-1.5 flex flex-col justify-between">
-                      <div>
-                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Prepared by/ Date:</span>
-                      </div>
-                      <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
-                        {selectedDR.signatoryPrepared?.signatureImage ? (
-                          <img src={selectedDR.signatoryPrepared.signatureImage} alt="Prepared Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                        ) : (
-                          <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                            <PenTool size={10} className="text-zinc-400" />
-                            <span className="text-[7.5px] font-bold uppercase">SIGNED ELECTRONICALLY</span>
+                        {/* Document Remarks/Footnotes */}
+                        {selectedDR.remarks && (
+                          <div className="mt-3.5 p-2 rounded border border-zinc-200 text-left text-[8.5px] leading-relaxed text-zinc-500 font-sans">
+                            <span className="font-extrabold text-[#FF6A00] uppercase block mb-0.5">Dispatcher / Routing Notes:</span>
+                            {selectedDR.remarks}
                           </div>
                         )}
-                      </div>
-                      <div className="text-center font-sans">
-                        <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">
-                          {selectedDR.signatoryPrepared?.name || selectedDR.issuedBy || 'Sarah Connor'}
-                        </span>
-                        <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
-                      </div>
-                    </div>
 
-                    {/* Row 1 Column 2: Delivered/Installed */}
-                    <div className="space-y-1.5 flex flex-col justify-between">
-                      <div>
-                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Delivered/Installed by/ Date:</span>
-                      </div>
-                      <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
-                        {selectedDR.signatoryDelivered?.signatureImage ? (
-                          <img src={selectedDR.signatoryDelivered.signatureImage} alt="Delivered Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                        ) : (
-                          <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                            <PenTool size={10} className="text-zinc-400" />
-                            <span className="text-[7.5px] font-bold uppercase">SIGNED ELECTRONICALLY</span>
+                        {/* SIGNATURE FIELDS AT THE BOTTOM (A high-fidelity 2x2 paper document signatory section) */}
+                        <div className="mt-6 pt-4 border-t border-zinc-300 grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-5 text-left leading-snug text-[10px]">
+                          
+                          {/* Row 1 Column 1: Prepared */}
+                          <div className="space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-bold uppercase text-zinc-600 block">Prepared by/ Date:</span>
+                            </div>
+                            <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
+                              {selectedDR.signatoryPrepared?.signatureImage ? (
+                                <img src={selectedDR.signatoryPrepared.signatureImage} alt="Prepared Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                              ) : (
+                                <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
+                                  <PenTool size={10} className="text-zinc-400" />
+                                  <span className="text-[7.5px] font-bold uppercase">SIGNED ELECTRONICALLY</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-center font-sans">
+                              <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">
+                                {selectedDR.signatoryPrepared?.name || selectedDR.issuedBy || 'Bianca Aguinaldo'}
+                              </span>
+                              <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                      <div className="text-center font-sans">
-                        <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[240px] mx-auto text-[10px] uppercase tracking-wide leading-none">
-                          C/O DID STAFF: {selectedDR.signatoryDelivered?.name || selectedDR.deliveredBy || 'JOHN ROBERT PAGALA'}
-                        </span>
-                        <span className="text-[8px] text-zinc-405 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature/Date</span>
-                      </div>
-                    </div>
 
-                    {/* Row 2 Column 1: Approved */}
-                    <div className="space-y-1.5 flex flex-col justify-between">
-                      <div>
-                        <span className="text-[9px] font-bold uppercase text-zinc-600 block">Approved by/ Date:</span>
-                      </div>
-                      <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
-                        {selectedDR.signatoryApproved?.signatureImage ? (
-                          <img src={selectedDR.signatoryApproved.signatureImage} alt="Approved Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                        ) : (
-                          <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
-                            <PenTool size={10} className="text-zinc-400" />
-                            <span className="text-[7.5px] font-bold uppercase">SIGNED ELECTRONICALLY</span>
+                          {/* Row 1 Column 2: Delivered/Installed (Full Name only - no date, no e-signature) */}
+                          <div className="space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-bold uppercase text-zinc-600 block">Delivered/Installed by:</span>
+                            </div>
+                            <div className="h-14 flex items-center justify-center">
+                              {/* Clean spacing for paper alignment */}
+                            </div>
+                            <div className="text-center font-sans">
+                              <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[240px] mx-auto text-[10px] uppercase tracking-wide leading-none">
+                                {selectedDR.signatoryDelivered?.name || selectedDR.deliveredBy || 'JOHN ROBERT PAGALA'}
+                              </span>
+                              <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name</span>
+                            </div>
                           </div>
-                        )}
-                      </div>
-                      <div className="text-center font-sans">
-                        <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">
-                          {selectedDR.signatoryApproved?.name || 'JERALD DELA CRUZ'}
-                        </span>
-                        <span className="text-[8px] text-zinc-405 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
-                      </div>
-                    </div>
 
-                    {/* Row 2 Column 2: Checked and Received */}
-                    <div className="space-y-1.5 flex flex-col justify-between">
-                      <div>
-                        <span className="text-[9px] font-bold uppercase text-zinc-650 block">CHECKED and Received target:</span>
-                      </div>
-                      <div className="h-14 border border-dashed border-zinc-205 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
-                        {selectedDR.signatoryCheckedReceived?.signatureImage ? (
-                          <img src={selectedDR.signatoryCheckedReceived.signatureImage} alt="Received Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
-                        ) : selectedDR.receivedBy ? (
-                          <div className="text-zinc-500 text-center font-medium text-[8px] uppercase">
-                            {selectedDR.receivedBy}
+                          {/* Row 2 Column 1: Approved */}
+                          <div className="space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-bold uppercase text-zinc-600 block">Approved by/ Date:</span>
+                            </div>
+                            <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
+                              {selectedDR.signatoryApproved?.signatureImage ? (
+                                <img src={selectedDR.signatoryApproved.signatureImage} alt="Approved Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                              ) : (
+                                <div className="text-zinc-400 text-center font-mono opacity-50 flex items-center gap-1">
+                                  <PenTool size={10} className="text-zinc-400" />
+                                  <span className="text-[7.5px] font-bold uppercase">SIGNED ELECTRONICALLY</span>
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-center font-sans">
+                              <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none">
+                                {selectedDR.signatoryApproved?.name || 'JERALD DELA CRUZ'}
+                              </span>
+                              <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
+                            </div>
                           </div>
-                        ) : (
-                          <span className="text-zinc-300 text-[9px] italic">No physical signature</span>
-                        )}
-                      </div>
-                      <div className="text-center font-sans">
-                        <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none text-brand-orange">
-                          {selectedDR.receivedBy || selectedDR.signatoryCheckedReceived?.name || 'Awaiting Client Signature'}
-                        </span>
-                        <span className="text-[8px] text-zinc-405 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature</span>
-                      </div>
-                    </div>
 
-                  </div>
+                          {/* Row 2 Column 2: Checked and Received */}
+                          <div className="space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <span className="text-[9px] font-bold uppercase text-zinc-650 block">CHECKED and Received the above articles in good order and condition:</span>
+                            </div>
+                            <div className="h-14 border border-dashed border-zinc-200 bg-zinc-50/50 rounded overflow-hidden flex items-center justify-center">
+                              {selectedDR.signatoryCheckedReceived?.signatureImage ? (
+                                <img src={selectedDR.signatoryCheckedReceived.signatureImage} alt="Received Sig" className="object-contain h-full w-44 opacity-95 scale-100" />
+                              ) : selectedDR.receivedBy ? (
+                                <div className="text-zinc-500 text-center font-medium text-[8px] uppercase">
+                                  {selectedDR.receivedBy}
+                                </div>
+                              ) : (
+                                <span className="text-zinc-300 text-[9px] italic">No physical signature</span>
+                              )}
+                            </div>
+                            <div className="text-center font-sans">
+                              <span className="font-extrabold text-zinc-900 border-b border-zinc-400 block pb-0.5 max-w-[200px] mx-auto text-[10px] uppercase tracking-wide leading-none text-brand-orange">
+                                {selectedDR.receivedBy || selectedDR.signatoryCheckedReceived?.name || 'Awaiting Client Signature'}
+                              </span>
+                              <span className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider mt-1 block">Printed Name/Signature/Date</span>
+                            </div>
+                          </div>
 
-                </div>
+                        </div>
+
+                        {/* Document Footnote */}
+                        <div className="mt-8 border-t border-zinc-300 pt-3.5 flex items-center justify-between text-[8px] text-zinc-400 font-mono">
+                          <span>* Please fill up remarks field if necessary</span>
+                          <span className="font-bold">page {page.pageNumber} of {page.totalPages}</span>
+                          <span>cc: FPH I.T. Dept., Customer</span>
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
 
               {/* Action slide-over footer */}

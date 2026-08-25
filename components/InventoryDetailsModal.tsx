@@ -29,6 +29,7 @@ interface Transaction {
   reference_id: string | null;
   reason?: string;
   serial_numbers?: string[];
+  condition?: string;
 }
 
 const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, onClose, onUpdate, item, isDarkMode = false, userRole = 'Staff' }) => {
@@ -43,9 +44,33 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
   const [editQty, setEditQty] = useState<string>('');
   const [editReason, setEditReason] = useState<string>('');
   const [editSerials, setEditSerials] = useState<string[]>([]);
+  const [editLocation, setEditLocation] = useState<string>('');
+  const [editCondition, setEditCondition] = useState<string>('Brand New');
+  const [locationList, setLocationList] = useState<string[]>([
+    'IT Basement',
+    'Areys Warehouse',
+    'Project 6 Warehouse',
+    'Silang Warehouse'
+  ]);
   const [isUpdating, setIsUpdating] = useState(false);
   const isSuperAdmin = userRole === 'Super admin';
   const isAdmin = userRole === 'Admin' || isSuperAdmin;
+
+  useEffect(() => {
+    const fetchLocations = async () => {
+      if (!isSupabaseConfigured) return;
+      try {
+        const { data } = await supabase.from('locations').select('name').order('name');
+        if (data && data.length > 0) {
+          const names = data.map((l: any) => l.name).filter(Boolean);
+          setLocationList(prev => Array.from(new Set([...prev, ...names])));
+        }
+      } catch (e) {
+        console.warn('Error fetching locations:', e);
+      }
+    };
+    fetchLocations();
+  }, []);
 
   const formatCreatedBy = (username: string) => {
     if (!username) return 'System';
@@ -53,17 +78,14 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
     const currentUsername = localStorage.getItem('aralinks_user');
     const currentFullName = localStorage.getItem('aralinks_fullname');
     
-    // If the transaction user matches the current logged in user, use their stored full name
     if (username.toLowerCase() === currentUsername?.toLowerCase() && currentFullName) {
       return currentFullName.split(' ')[0];
     }
     
-    // Fallback: handle the 'admin' word specifically if it matches current user expectations
     if (username.toLowerCase() === 'admin' && !currentUsername) {
       return 'Admin';
     }
 
-    // Return the first part of the username if no full name is available
     return username.split(/[._ ]/)[0];
   };
 
@@ -76,6 +98,11 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
       return;
     }
 
+    if (!editLocation.trim()) {
+      setFeedback({ type: 'error', message: 'Please select or enter a location.' });
+      return;
+    }
+
     // If serialized, quantity must match serial numbers count
     if (editingTx.serial_numbers && editingTx.serial_numbers.length > 0 && newQty !== editSerials.length) {
       setFeedback({ type: 'error', message: `The quantity (${newQty}) must match the number of serial numbers (${editSerials.length}).` });
@@ -85,11 +112,121 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
     setIsUpdating(true);
     setFeedback(null);
     try {
-      const diff = newQty - editingTx.quantity;
-      const oldSerials = editingTx.serial_numbers || [];
-      const isInitial = editingTx.transaction_type === 'Initial' || editingTx.transaction_type === 'Replenishment';
+      const oldQty = editingTx.quantity;
+      const oldLocation = editingTx.to_location;
+      const oldCondition = editingTx.condition || 'Brand New';
+      const newLocation = editLocation.trim();
+      const newCondition = editCondition;
 
-      // 1. Update Serial Numbers
+      const oldSerials = editingTx.serial_numbers || [];
+
+      // Helper for condition key mapping
+      const getCondKey = (condStr: string): 'brand_new_qty' | 'used_qty' | 'defective_qty' | 'disposal_qty' => {
+        const c = (condStr || '').toLowerCase();
+        if (c.includes('used')) return 'used_qty';
+        if (c.includes('defect')) return 'defective_qty';
+        if (c.includes('dispos')) return 'disposal_qty';
+        return 'brand_new_qty';
+      };
+
+      const oldCondKey = getCondKey(oldCondition);
+      const newCondKey = getCondKey(newCondition);
+
+      // 1. Update stock in item_location_stocks
+      if (oldLocation === newLocation) {
+        const { data: stockInfo, error: fetchStockError } = await supabase
+          .from('item_location_stocks')
+          .select('*')
+          .eq('item_code', item.item_code)
+          .eq('location', oldLocation)
+          .maybeSingle();
+
+        if (fetchStockError) throw fetchStockError;
+
+        if (stockInfo) {
+          const qtyDiff = newQty - oldQty;
+          const newTotal = (stockInfo.quantity || 0) + qtyDiff;
+          if (newTotal < 0) throw new Error(`Resulting stock at ${oldLocation} cannot be negative.`);
+
+          const updateFields: any = { quantity: newTotal };
+
+          if (oldCondKey === newCondKey) {
+            updateFields[oldCondKey] = Math.max(0, (stockInfo[oldCondKey] || 0) + qtyDiff);
+          } else {
+            // Condition changed
+            updateFields[oldCondKey] = Math.max(0, (stockInfo[oldCondKey] || 0) - oldQty);
+            updateFields[newCondKey] = (stockInfo[newCondKey] || 0) + newQty;
+          }
+
+          const { error: stockError } = await supabase
+            .from('item_location_stocks')
+            .update(updateFields)
+            .eq('id', stockInfo.id);
+
+          if (stockError) throw stockError;
+        } else {
+          const { error: insStockError } = await supabase
+            .from('item_location_stocks')
+            .insert([{
+              item_code: item.item_code,
+              item_name: item.item_name,
+              location: newLocation,
+              quantity: newQty,
+              [newCondKey]: newQty
+            }]);
+          if (insStockError) throw insStockError;
+        }
+      } else {
+        // Location changed: Revert from oldLocation and add to newLocation
+        const { data: oldStockInfo } = await supabase
+          .from('item_location_stocks')
+          .select('*')
+          .eq('item_code', item.item_code)
+          .eq('location', oldLocation)
+          .maybeSingle();
+
+        if (oldStockInfo) {
+          const newOldTotal = Math.max(0, (oldStockInfo.quantity || 0) - oldQty);
+          const newOldCondQty = Math.max(0, (oldStockInfo[oldCondKey] || 0) - oldQty);
+
+          await supabase
+            .from('item_location_stocks')
+            .update({
+              quantity: newOldTotal,
+              [oldCondKey]: newOldCondQty
+            })
+            .eq('id', oldStockInfo.id);
+        }
+
+        const { data: newStockInfo } = await supabase
+          .from('item_location_stocks')
+          .select('*')
+          .eq('item_code', item.item_code)
+          .eq('location', newLocation)
+          .maybeSingle();
+
+        if (newStockInfo) {
+          await supabase
+            .from('item_location_stocks')
+            .update({
+              quantity: (newStockInfo.quantity || 0) + newQty,
+              [newCondKey]: (newStockInfo[newCondKey] || 0) + newQty
+            })
+            .eq('id', newStockInfo.id);
+        } else {
+          await supabase
+            .from('item_location_stocks')
+            .insert([{
+              item_code: item.item_code,
+              item_name: item.item_name,
+              location: newLocation,
+              quantity: newQty,
+              [newCondKey]: newQty
+            }]);
+        }
+      }
+
+      // 2. Update Serial Numbers
       if (editSerials.length > 0 || oldSerials.length > 0) {
         // Find serials to delete (in old but not in new)
         const toDelete = oldSerials.filter(s => !editSerials.includes(s));
@@ -109,27 +246,31 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
 
           const oldSn = i < oldSerials.length ? oldSerials[i] : null;
 
-          if (oldSn && oldSn !== newSn) {
+          if (oldSn) {
             // Update existing
             const { error: updError } = await supabase
               .from('item_serials')
-              .update({ serial_number: newSn })
+              .update({
+                serial_number: newSn,
+                location: newLocation,
+                condition: newCondition
+              })
               .eq('item_code', item.item_code)
               .eq('serial_number', oldSn);
             if (updError) {
               if (updError.message.includes('unique')) throw new Error(`Serial "${newSn}" already exists.`);
               throw updError;
             }
-          } else if (!oldSn) {
+          } else {
             // Add new
             const { error: insError } = await supabase
               .from('item_serials')
               .insert({
                 item_code: item.item_code,
                 serial_number: newSn,
-                location: editingTx.to_location,
+                location: newLocation,
                 status: 'Available',
-                condition: 'Brand New', // Default for initial
+                condition: newCondition,
                 request_id: editingTx.reference_id || null
               });
             if (insError) {
@@ -140,65 +281,12 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
         }
       }
 
-      if (diff !== 0) {
-        // 2. Update stock in to_location (Destination)
-        const { data: stockInfo, error: fetchStockError } = await supabase
-          .from('item_location_stocks')
-          .select('*')
-          .eq('item_code', item.item_code)
-          .eq('location', editingTx.to_location)
-          .maybeSingle();
-
-        if (fetchStockError) throw fetchStockError;
-
-        if (stockInfo) {
-          const newTotal = (stockInfo.quantity || 0) + diff;
-          if (newTotal < 0) throw new Error(`Resulting stock at ${editingTx.to_location} cannot be negative.`);
-
-          const updateFields: any = { quantity: newTotal };
-          if (isInitial && stockInfo.brand_new_qty !== undefined) {
-             updateFields.brand_new_qty = (stockInfo.brand_new_qty || 0) + diff;
-          }
-
-          const { error: stockError } = await supabase
-            .from('item_location_stocks')
-            .update(updateFields)
-            .eq('id', stockInfo.id);
-
-          if (stockError) throw stockError;
-        }
-
-        // 3. If it's a Transfer, update from_location (Source)
-        if (editingTx.transaction_type === 'Transfer' && editingTx.from_location) {
-          const { data: fromStockInfo, error: fetchFromError } = await supabase
-            .from('item_location_stocks')
-            .select('*')
-            .eq('item_code', item.item_code)
-            .eq('location', editingTx.from_location)
-            .maybeSingle();
-
-          if (fetchFromError) throw fetchFromError;
-
-          if (fromStockInfo) {
-            // Subtract diff from source
-            const newFromTotal = (fromStockInfo.quantity || 0) - diff;
-            if (newFromTotal < 0) throw new Error(`Resulting stock at ${editingTx.from_location} cannot be negative.`);
-
-            const { error: fromStockError } = await supabase
-              .from('item_location_stocks')
-              .update({ quantity: newFromTotal })
-              .eq('id', fromStockInfo.id);
-
-            if (fromStockError) throw fromStockError;
-          }
-        }
-      }
-
       // 3. Update transaction record
       const { error: updateError } = await supabase
         .from('stock_transactions')
         .update({ 
           quantity: newQty,
+          to_location: newLocation,
           reason: editReason 
         })
         .eq('id', editingTx.id);
@@ -411,7 +499,7 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
       // We filter by item_code which is indexed, making this reasonably efficient
       const { data: serialData, error: serialError } = await supabase
         .from('item_serials')
-        .select('serial_number, request_id, location')
+        .select('serial_number, request_id, location, condition')
         .eq('item_code', item.item_code);
 
       if (serialError) {
@@ -419,16 +507,16 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
       }
 
       // Group serials by request_id
-      const serialGroups: { [key: string]: string[] } = {};
-      const nullRequestIdSerials: string[] = [];
+      const serialObjGroups: { [key: string]: { serial_number: string; condition?: string; location?: string }[] } = {};
+      const nullRequestIdSerialObjs: { serial_number: string; condition?: string; location?: string }[] = [];
       
       if (serialData) {
         serialData.forEach(s => {
           if (s.request_id) {
-            if (!serialGroups[s.request_id]) serialGroups[s.request_id] = [];
-            serialGroups[s.request_id].push(s.serial_number);
+            if (!serialObjGroups[s.request_id]) serialObjGroups[s.request_id] = [];
+            serialObjGroups[s.request_id].push(s);
           } else {
-            nullRequestIdSerials.push(s.serial_number);
+            nullRequestIdSerialObjs.push(s);
           }
         });
       }
@@ -446,22 +534,25 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
         const isInitialType = tx.transaction_type === 'Initial' || tx.transaction_type === 'Replenishment';
         const qty = Math.abs(tx.quantity);
 
+        let sliceObjs: { serial_number: string; condition?: string; location?: string }[] = [];
+
         // 1. If we have a reference_id, try that first (Standard case for new data)
-        if (refId && serialGroups[refId]) {
+        if (refId && serialObjGroups[refId]) {
           const currentCursor = cursors[refId] || 0;
-          const slice = serialGroups[refId].slice(currentCursor, currentCursor + qty);
+          sliceObjs = serialObjGroups[refId].slice(currentCursor, currentCursor + qty);
           cursors[refId] = currentCursor + qty;
-          return { ...tx, serial_numbers: slice };
-        }
-
-        // 2. If it's an Initial transaction and we have serials with null request_id
-        if (isInitialType && nullRequestIdSerials.length > 0) {
-          const slice = nullRequestIdSerials.slice(initialNullCursor, initialNullCursor + qty);
+        } else if (isInitialType && nullRequestIdSerialObjs.length > 0) {
+          // 2. If it's an Initial transaction and we have serials with null request_id
+          sliceObjs = nullRequestIdSerialObjs.slice(initialNullCursor, initialNullCursor + qty);
           initialNullCursor += qty;
-          return { ...tx, serial_numbers: slice };
         }
 
-        return { ...tx, serial_numbers: [] };
+        const serial_numbers = sliceObjs.map(s => s.serial_number);
+        const condition = sliceObjs.length > 0 && sliceObjs[0].condition 
+          ? sliceObjs[0].condition 
+          : 'Brand New';
+
+        return { ...tx, serial_numbers, condition };
       });
       
       setHistory(historyWithSerials);
@@ -567,7 +658,7 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
                             {(tx.transaction_type === 'Initial' || tx.transaction_type === 'Replenishment') ? 'Initial' : tx.transaction_type}
                           </span>
                           
-                          {(isSuperAdmin || (userRole === 'Admin' && tx.transaction_type !== 'Initial' && tx.transaction_type !== 'Replenishment')) && (
+                          {(isAdmin || isSuperAdmin) && (
                             <div className="flex items-center gap-1">
                               <button 
                                 onClick={() => {
@@ -575,6 +666,8 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
                                   setEditQty(tx.quantity.toString());
                                   setEditReason(tx.reason || '');
                                   setEditSerials(tx.serial_numbers || []);
+                                  setEditLocation(tx.to_location || 'IT Basement');
+                                  setEditCondition(tx.condition || 'Brand New');
                                 }}
                                 className={`p-1.5 rounded-lg transition-all ${isDarkMode ? 'bg-slate-700 text-slate-400 hover:text-white' : 'bg-slate-100 text-slate-400 hover:text-slate-700'}`}
                                 title="Edit Record"
@@ -614,15 +707,22 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
                             </div>
                           </div>
                         ) : (
-                          <p className="text-base font-bold">
-                            {(tx.transaction_type === 'Initial' || tx.transaction_type === 'Replenishment') ? (
-                              <>Initialized <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> units at <span className="underline">{tx.to_location}</span></>
-                            ) : tx.transaction_type === 'Adjustment' ? (
-                              <>Adjusted stock by <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> at <span className="underline">{tx.to_location}</span></>
-                            ) : (
-                              <>Delivered <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> units to <span className="underline">{tx.to_location}</span></>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-base font-bold">
+                              {(tx.transaction_type === 'Initial' || tx.transaction_type === 'Replenishment') ? (
+                                <>Initialized <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> units at <span className="underline">{tx.to_location}</span></>
+                              ) : tx.transaction_type === 'Adjustment' ? (
+                                <>Adjusted stock by <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> at <span className="underline">{tx.to_location}</span></>
+                              ) : (
+                                <>Delivered <span className="font-black" style={{ color: 'var(--brand-accent)' }}>{tx.quantity}</span> units to <span className="underline">{tx.to_location}</span></>
+                              )}
+                            </p>
+                            {tx.condition && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-500/10 text-brand-orange border border-orange-500/20">
+                                {tx.condition}
+                              </span>
                             )}
-                          </p>
+                          </div>
                         )}
                       </div>
                       <div className="flex items-center gap-6 mb-4">
@@ -746,6 +846,39 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
 
               <div className="p-6 space-y-6">
                 <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Location</label>
+                      <select 
+                        value={editLocation}
+                        onChange={(e) => setEditLocation(e.target.value)}
+                        className={`w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-xs transition-all focus:border-brand-orange ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-slate-50 border-slate-100 text-slate-800'
+                        }`}
+                      >
+                        {locationList.map(loc => (
+                          <option key={loc} value={loc}>{loc}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Condition</label>
+                      <select 
+                        value={editCondition}
+                        onChange={(e) => setEditCondition(e.target.value)}
+                        className={`w-full px-4 py-3 rounded-xl border-2 outline-none font-bold text-xs transition-all focus:border-brand-orange ${
+                          isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-slate-50 border-slate-100 text-slate-800'
+                        }`}
+                      >
+                        <option value="Brand New">Brand New</option>
+                        <option value="Used">Used</option>
+                        <option value="Defective">Defective</option>
+                        <option value="Disposal">Disposal</option>
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Quantity</label>
                     <input 

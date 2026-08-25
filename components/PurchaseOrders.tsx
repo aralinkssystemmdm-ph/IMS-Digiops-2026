@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, ChevronDown, FileText, Plus, ExternalLink, Calendar, User, Package, Building2, Eye, Edit3, Loader2, ArrowUp, Tag, Clock } from 'lucide-react';
+import { Search, Filter, ChevronDown, FileText, Plus, ExternalLink, Calendar, User, Package, Building2, Eye, Edit3, Loader2, ArrowUp, Tag, Clock, Trash2, AlertTriangle, X } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { toTitleCase, cleanPONumber } from '../lib/utils';
 import PageHeader from './PageHeader';
@@ -16,6 +16,7 @@ interface PurchaseOrder {
   status: string;
   itemCount: number;
   totalQuantity: number;
+  hasDeliverables: boolean;
 }
 
 interface PurchaseOrdersProps {
@@ -35,6 +36,10 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
   const [statusFilter, setStatusFilter] = useState('All');
   const [sortConfig, setSortConfig] = useState<{ key: keyof PurchaseOrder; direction: 'asc' | 'desc' }>({ key: 'date', direction: 'desc' });
 
+  const [poToDelete, setPoToDelete] = useState<PurchaseOrder | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [alertMessage, setAlertMessage] = useState<{ title: string; desc: string; isError?: boolean } | null>(null);
+
   // Parsing logic to flatten POs from item_requests
   const fetchPurchaseOrders = async () => {
     if (!isSupabaseConfigured) return;
@@ -50,6 +55,9 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
 
       requests?.forEach(req => {
         if (!req.po_number) return;
+
+        const reqHasDeliverables = (req.item_request_items || []).some((item: any) => (parseInt(item.received_quantity) || 0) > 0) ||
+          req.status === 'Delivered' || req.status === 'Partially Delivered';
 
         // Use same parsing logic as ItemsRequest.tsx
         const parts = req.po_number.split(';').map((p: string) => p.trim()).filter(Boolean);
@@ -99,7 +107,8 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
               date: req.date,
               status: req.status,
               itemCount,
-              totalQuantity: totalQty
+              totalQuantity: totalQty,
+              hasDeliverables: reqHasDeliverables
             });
           }
         });
@@ -110,6 +119,90 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
       console.error("Error fetching purchase orders:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleConfirmDeletePo = async () => {
+    if (!poToDelete || !isSupabaseConfigured) return;
+
+    if (poToDelete.hasDeliverables) {
+      setAlertMessage({
+        title: 'Delete Disabled',
+        desc: `Cannot delete PO "${poToDelete.poNumber}" because deliverables have already been encoded. Revert/delete the deliverables first.`,
+        isError: true
+      });
+      setPoToDelete(null);
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      // 1. Fetch request to get full po_number string
+      const { data: req, error: fetchErr } = await supabase
+        .from('item_requests')
+        .select('po_number, items:item_request_items(*)')
+        .eq('control_no', poToDelete.requestId)
+        .single();
+
+      if (fetchErr) throw fetchErr;
+
+      // 2. Check if deliverables exist in transactions or received_quantity
+      const { data: txs } = await supabase
+        .from('stock_transactions')
+        .select('id')
+        .eq('reference_id', poToDelete.requestId)
+        .ilike('reason', `%PO:${poToDelete.poNumber}%`);
+
+      const itemsHasDelivered = (req?.items || []).some((i: any) => (parseInt(i.received_quantity) || 0) > 0);
+
+      if ((txs && txs.length > 0) || itemsHasDelivered) {
+        setAlertMessage({
+          title: 'Delete Blocked',
+          desc: `Cannot delete PO "${poToDelete.poNumber}" because deliverables have already been encoded. Revert deliverables first.`,
+          isError: true
+        });
+        setPoToDelete(null);
+        return;
+      }
+
+      // 3. Remove PO entry from po_number string
+      if (req?.po_number) {
+        const parts = req.po_number.split(';').map((p: string) => p.trim()).filter(Boolean);
+        const remainingParts = parts.filter((part: string) => {
+          const match = part.match(/^(.*?)\s*(?:\[(.*?)\])?\s*\{(.*)\}$|^(.*?)\s*\[(.*?)\]$|^(.*)$/);
+          let pNum = '';
+          if (match) {
+            pNum = (match[1] || match[4] || match[6] || '').trim();
+          }
+          return pNum.toLowerCase() !== poToDelete.poNumber.toLowerCase();
+        });
+
+        const newPoString = remainingParts.length > 0 ? remainingParts.join(' ; ') : null;
+
+        const { error: updateErr } = await supabase
+          .from('item_requests')
+          .update({ po_number: newPoString })
+          .eq('control_no', poToDelete.requestId);
+
+        if (updateErr) throw updateErr;
+
+        setAlertMessage({
+          title: 'PO Deleted',
+          desc: `Purchase Order "${poToDelete.poNumber}" has been successfully deleted.`,
+          isError: false
+        });
+        await fetchPurchaseOrders();
+      }
+    } catch (err: any) {
+      console.error('Failed to delete PO:', err);
+      setAlertMessage({
+        title: 'Error',
+        desc: err.message || 'Failed to delete Purchase Order.',
+        isError: true
+      });
+    } finally {
+      setIsDeleting(false);
+      setPoToDelete(null);
     }
   };
 
@@ -280,17 +373,45 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                       </span>
                     </td>
                     <td className="p-6 text-right">
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onNavigate?.('requests', { requestId: po.requestId, status: 'All', openPoModal: true });
-                        }}
-                        className={`p-2 rounded-xl transition-all active:scale-95 hover:bg-[#2563EB] hover:text-white ${
-                          isDarkMode ? 'text-slate-500 bg-slate-800' : 'text-slate-400 bg-slate-100'
-                        }`}
-                      >
-                        <Edit3 size={16} />
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onNavigate?.('requests', { requestId: po.requestId, status: 'All', openPoModal: true });
+                          }}
+                          className={`p-2 rounded-xl transition-all active:scale-95 hover:bg-[#2563EB] hover:text-white ${
+                            isDarkMode ? 'text-slate-500 bg-slate-800' : 'text-slate-400 bg-slate-100'
+                          }`}
+                          title="Edit Purchase Order"
+                        >
+                          <Edit3 size={16} />
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (po.hasDeliverables) {
+                              setAlertMessage({
+                                title: 'Delete Disabled',
+                                desc: `Cannot delete PO "${po.poNumber}" because deliverables have already been encoded. Please revert/delete deliverables first.`,
+                                isError: true
+                              });
+                              return;
+                            }
+                            setPoToDelete(po);
+                          }}
+                          disabled={po.hasDeliverables}
+                          className={`p-2 rounded-xl transition-all active:scale-95 ${
+                            po.hasDeliverables
+                              ? 'opacity-40 cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800 dark:text-slate-600'
+                              : isDarkMode
+                                ? 'text-slate-400 bg-slate-800 hover:text-red-500 hover:bg-red-500/10'
+                                : 'text-slate-400 bg-slate-100 hover:text-red-500 hover:bg-red-50'
+                          }`}
+                          title={po.hasDeliverables ? "Delete disabled: Deliverables have already been encoded" : "Delete Purchase Order"}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </motion.tr>
                 ))}
@@ -309,6 +430,88 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
           )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {poToDelete && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl border animate-in zoom-in-95 duration-200 ${
+            isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-100 text-slate-900'
+          }`}>
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-500/10 text-red-500 flex items-center justify-center shrink-0">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-black tracking-tight">Delete Purchase Order</h3>
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{poToDelete.poNumber}</p>
+              </div>
+            </div>
+
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-8 leading-relaxed">
+              Are you sure you want to delete PO <strong className="text-slate-900 dark:text-white">{poToDelete.poNumber}</strong> for requisition <strong className="text-slate-900 dark:text-white">{poToDelete.requestId}</strong>? This action will remove the PO assignment from the request.
+            </p>
+
+            <div className="flex items-center justify-end gap-3">
+              <button 
+                onClick={() => setPoToDelete(null)}
+                disabled={isDeleting}
+                className={`px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                  isDarkMode ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleConfirmDeletePo}
+                disabled={isDeleting}
+                className="px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-red-500/20 flex items-center gap-2"
+              >
+                {isDeleting && <Loader2 size={14} className="animate-spin" />}
+                <span>Delete PO</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alert / Notification Modal */}
+      {alertMessage && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className={`w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl border animate-in zoom-in-95 duration-200 ${
+            isDarkMode ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-100 text-slate-900'
+          }`}>
+            <div className="flex items-center gap-4 mb-4">
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
+                alertMessage.isError ? 'bg-red-100 dark:bg-red-500/10 text-red-500' : 'bg-emerald-100 dark:bg-emerald-500/10 text-emerald-500'
+              }`}>
+                {alertMessage.isError ? <AlertTriangle size={24} /> : <FileText size={24} />}
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-black tracking-tight">{alertMessage.title}</h3>
+              </div>
+              <button 
+                onClick={() => setAlertMessage(null)}
+                className={`p-2 rounded-xl transition-all ${isDarkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+              {alertMessage.desc}
+            </p>
+
+            <div className="flex justify-end">
+              <button 
+                onClick={() => setAlertMessage(null)}
+                className="px-6 py-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-500/20"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

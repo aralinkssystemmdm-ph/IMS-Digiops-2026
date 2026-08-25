@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Archive, Edit3, Loader2, FileText, Eye, ArrowUp, ArrowDown, CheckSquare, Square, Filter, ChevronDown, ChevronUp, Clock, MapPin, Tag, CheckCircle2, CalendarDays, X, Plus, Check, Calendar, Paperclip, Trash2, Box, History, Printer, ExternalLink, ArrowRightLeft, Notebook, TrendingUp, Download } from 'lucide-react';
+import { Search, Archive, Edit3, Loader2, FileText, Eye, ArrowUp, ArrowDown, CheckSquare, Square, Filter, ChevronDown, ChevronUp, Clock, MapPin, Tag, CheckCircle2, CalendarDays, X, Plus, Check, Calendar, Paperclip, Trash2, Box, History, Printer, ExternalLink, ArrowRightLeft, Notebook, TrendingUp, Download, Ban, RotateCcw, AlertTriangle } from 'lucide-react';
 import { toTitleCase, cleanPONumber, getBundleColor, getProgramBadgeClass } from '../lib/utils';
 import NewRequestModal from './NewRequestModal';
 import RequestPreviewModal from './RequestPreviewModal';
@@ -11,6 +11,7 @@ import DeleteConfirmationModal from './DeleteConfirmationModal';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useNotification } from './NotificationProvider';
 import PageHeader from './PageHeader';
+import { syncSchoolMonitoringWithDRs } from './monitoringSync';
 
 interface ItemsRequestProps {
   onNavigate?: (viewId: string, params?: any) => void;
@@ -34,7 +35,7 @@ export interface RequestData {
   requestedBy: string;
   archivedBy?: string; 
   archivedAt?: string;
-  status: 'Pending' | 'Delivered' | 'Partially Delivered';
+  status: 'Pending' | 'Delivered' | 'Partially Delivered' | 'Cancelled';
   purpose?: string;
   program?: string;
   poNumber?: string | null;
@@ -52,7 +53,7 @@ interface POEntry {
   itemQuantities: Record<string, number>;
 }
 
-type StatusFilterType = 'All' | 'Pending' | 'Partially' | 'Completed';
+type StatusFilterType = 'All' | 'Pending' | 'Partially' | 'Completed' | 'Cancelled';
 type ProgramFilterType = 'All' | 'NGS' | 'HUB' | 'TNL' | 'ACE' | 'NGS+ACE' | 'HUB+ACE' | 'PELS NGS' | 'PELS NGS+ACE' | 'ACE+PELS' | 'ABDL' | 'ACE+ABDL' | 'HUB+NGS' | 'ABDL (PELS)';
 type DateFilterType = 'All' | 'Today' | 'This Week' | 'This Month' | 'Custom';
 
@@ -64,6 +65,8 @@ interface RequestDetailsSidebarProps {
   onNavigate?: (viewId: string, params?: any) => void;
   onOpenPrint: () => void;
   onUpdateDelivery: () => void;
+  onCancelRequest?: (req: RequestData) => void;
+  onUndoCancelRequest?: (req: RequestData) => void;
   userRole?: string | null;
   initialExpandedPoIndex?: number | null;
 }
@@ -76,6 +79,8 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
   onNavigate,
   onOpenPrint,
   onUpdateDelivery,
+  onCancelRequest,
+  onUndoCancelRequest,
   userRole = 'Staff',
   initialExpandedPoIndex = null
 }) => {
@@ -444,11 +449,12 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
             <div className="flex items-center gap-3">
                <h1 className="text-4xl font-black tracking-tighter uppercase" style={{ color: 'var(--brand-accent)' }}>{request.id}</h1>
                <span className={`px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-widest border border-white/10 ${
+                 request.status === 'Cancelled' ? 'bg-rose-500 text-white' :
                  request.status === 'Delivered' ? 'bg-emerald-500 text-white' : 
                  request.status === 'Partially Delivered' ? 'bg-amber-500 text-white' : 
                  'bg-[#2563EB] text-white'
                }`}>
-                 {request.status === 'Delivered' ? 'DELIVERED' : request.status === 'Partially Delivered' ? 'PARTIAL' : 'PENDING'}
+                 {request.status === 'Cancelled' ? 'CANCELLED' : request.status === 'Delivered' ? 'DELIVERED' : request.status === 'Partially Delivered' ? 'PARTIAL' : 'PENDING'}
                </span>
             </div>
             {/* Tally Fix Button */}
@@ -839,14 +845,39 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
       {/* Footer Actions */}
       <div className={`p-6 border-t shrink-0 flex flex-col-reverse gap-3 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
          {userRole !== 'Staff' && (
-           <button 
-             onClick={onUpdateDelivery}
-             className={`w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${
-               isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-             }`}
-           >
-             <Edit3 size={12} /> Update Delivery
-           </button>
+           <>
+             {request.status === 'Cancelled' ? (
+               onUndoCancelRequest && (
+                 <button 
+                   onClick={() => onUndoCancelRequest(request)}
+                   className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl border border-blue-500/30 bg-blue-50 dark:bg-blue-950/30 text-[#2563EB] dark:text-blue-400 text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-all cursor-pointer shadow-sm"
+                 >
+                   <RotateCcw size={12} /> Undo Cancel (Restore Request)
+                 </button>
+               )
+             ) : (
+               onCancelRequest && (
+                 <button 
+                   onClick={() => onCancelRequest(request)}
+                   className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl border border-rose-500/30 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-all cursor-pointer shadow-sm"
+                 >
+                   <Ban size={12} /> Cancel Request
+                 </button>
+               )
+             )}
+             <button 
+               onClick={request.status === 'Cancelled' ? undefined : onUpdateDelivery}
+               disabled={request.status === 'Cancelled'}
+               className={`w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${
+                 request.status === 'Cancelled'
+                   ? 'bg-slate-100 dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-600 opacity-40 cursor-not-allowed'
+                   : isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 cursor-pointer' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 cursor-pointer'
+               }`}
+               title={request.status === 'Cancelled' ? 'Delivery update disabled: Request is cancelled' : 'Update Delivery'}
+             >
+               <Edit3 size={12} /> Update Delivery
+             </button>
+           </>
          )}
          <button 
            onClick={onOpenPrint}
@@ -880,6 +911,11 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
   const [isPoModalOpen, setIsPoModalOpen] = useState(false);
+  const [requestToCancel, setRequestToCancel] = useState<RequestData | null>(null);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [requestToUndoCancel, setRequestToUndoCancel] = useState<RequestData | null>(null);
+  const [isUndoCancelModalOpen, setIsUndoCancelModalOpen] = useState(false);
+  const [isProcessingCancel, setIsProcessingCancel] = useState(false);
   const [selectedItemCodeForPo, setSelectedItemCodeForPo] = useState<string | null>(null);
   const [isPoDropdownOpen, setIsPoDropdownOpen] = useState(false);
   const [poSearchQuery, setPoSearchQuery] = useState('');
@@ -1047,9 +1083,11 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         console.error('Error fetching requests:', error);
       } else if (data) {
         const mapped = data.map((req: any) => {
-          let status: 'Pending' | 'Delivered' | 'Partially Delivered' = 'Pending';
+          let status: 'Pending' | 'Delivered' | 'Partially Delivered' | 'Cancelled' = 'Pending';
           
-          if (req.status === 'Delivered' || req.status === 'Partially Delivered') {
+          if (req.status === 'Cancelled') {
+            status = 'Cancelled';
+          } else if (req.status === 'Delivered' || req.status === 'Partially Delivered') {
             status = req.status;
           } else if (req.status === 'Complete' || req.delivered_at) {
             status = 'Delivered';
@@ -1156,6 +1194,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       Pending: requests.filter(r => r.status === 'Pending').length,
       Partially: requests.filter(r => r.status === 'Partially Delivered').length,
       Completed: requests.filter(r => r.status === 'Delivered').length,
+      Cancelled: requests.filter(r => r.status === 'Cancelled').length,
     };
     list.forEach(p => {
       res[p] = requests.filter(r => (r.program || 'GENERAL').toUpperCase() === p.toUpperCase()).length;
@@ -1175,11 +1214,10 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
 
       // Status Filter
       if (statusFilter !== 'All') {
-        const internalStatus = 
-          statusFilter === 'Pending' ? 'Pending' :
-          statusFilter === 'Partially' ? 'Partially Delivered' :
-          'Delivered';
-        if (req.status !== internalStatus) return false;
+        if (statusFilter === 'Pending' && req.status !== 'Pending') return false;
+        if (statusFilter === 'Partially' && req.status !== 'Partially Delivered') return false;
+        if (statusFilter === 'Completed' && req.status !== 'Delivered') return false;
+        if (statusFilter === 'Cancelled' && req.status !== 'Cancelled') return false;
       }
 
       // Program Filter
@@ -1255,7 +1293,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           const statusPriority: Record<string, number> = {
             'Pending': 1,
             'Partially Delivered': 2,
-            'Delivered': 3
+            'Delivered': 3,
+            'Cancelled': 4
           };
           comparison = (statusPriority[a.status] || 99) - (statusPriority[b.status] || 99);
           break;
@@ -1291,11 +1330,13 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     if (status === 'Pending') return 'Pending';
     if (status === 'Partially Delivered') return 'Partially';
     if (status === 'Delivered') return 'Completed';
+    if (status === 'Cancelled') return 'Cancelled';
     return status;
   };
 
   const renderRequestRow = (req: RequestData, i: number) => {
     const isSelected = selectedIds.has(req.id);
+    const isCancelled = req.status === 'Cancelled';
     const isDelivered = req.status === 'Delivered';
     const isPartial = req.status === 'Partially Delivered';
     const isFinalized = isDelivered || isPartial;
@@ -1332,6 +1373,18 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               poNum = part.trim();
             }
 
+            if (isCancelled || userRole === 'Staff') {
+              return (
+                <span
+                  key={idx}
+                  className="text-[10px] font-black text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg tracking-tight uppercase border border-slate-200 dark:border-slate-700/60 whitespace-nowrap cursor-not-allowed opacity-60"
+                  title={isCancelled ? "PO details locked: Request is cancelled" : "PO details locked: Staff role view-only"}
+                >
+                  {poNum}
+                </span>
+              );
+            }
+
             return (
               <button
                 key={idx}
@@ -1345,7 +1398,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                   setPoModalRequest(req);
                   setIsPoModalOpen(true);
                 }}
-                className="text-[10px] font-black text-white bg-[#2563EB] px-3 py-1.5 rounded-lg tracking-tight uppercase shadow-md shadow-[#2563EB]/20 transform transition-all hover:scale-105 active:scale-95 hover:bg-[#1d4ed8] whitespace-nowrap border border-white/10"
+                className="text-[10px] font-black text-white bg-[#2563EB] px-3 py-1.5 rounded-lg tracking-tight uppercase shadow-md shadow-[#2563EB]/20 transform transition-all hover:scale-105 active:scale-95 hover:bg-[#1d4ed8] whitespace-nowrap border border-white/10 cursor-pointer"
               >
                 {poNum}
               </button>
@@ -1362,6 +1415,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           style={{ animationDelay: `${i * 50}ms` }}
           className={`group animate-ease-in-down transition-all duration-200 border-l-4 hover:border-l-orange-500 cursor-pointer flex items-center px-6 py-3 min-w-[1000px] lg:min-w-full ${
             i % 2 === 0 ? (isDarkMode ? 'bg-slate-900' : 'bg-white') : (isDarkMode ? 'bg-slate-800/30' : 'bg-gray-50/50')
+          } ${
+            isCancelled ? 'opacity-55 grayscale-[35%] bg-slate-100/60 dark:bg-slate-950/40 hover:opacity-85' : ''
           } ${
             deletingId === req.id ? 'opacity-50 grayscale pointer-events-none' : ''
           } ${isHighlighted ? 'highlight-entry-focus' : ''} ${isSelected ? (isDarkMode ? 'bg-[#2563EB]/10 border-l-[#2563EB]' : 'bg-[#EFF6FF] border-l-[#2563EB]') : 'border-l-transparent'} ${selectedDetailsRequest?.id === req.id ? (isDarkMode ? 'bg-[#2563EB]/10 border-l-orange-500 shadow-inner' : 'bg-orange-50 border-l-orange-500 shadow-inner') : ''} hover:bg-orange-50 dark:hover:bg-slate-800 mb-[1px] last:mb-0 transition-colors`}
@@ -1380,7 +1435,9 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         <div className="flex-1 min-w-0 px-2 whitespace-nowrap">
           <div className="flex flex-col leading-tight relative group/info">
              <div className="flex items-center gap-1.5">
-               <span className="text-xs font-bold text-slate-800 dark:text-white tracking-tight transition-colors whitespace-nowrap group-hover:text-[var(--brand-accent)]">{req.id}</span>
+               <span className={`text-xs font-bold tracking-tight transition-colors whitespace-nowrap group-hover:text-[var(--brand-accent)] ${
+                 isCancelled ? 'text-slate-500 dark:text-slate-400' : 'text-slate-800 dark:text-white'
+               }`}>{req.id}</span>
                {req.attachment && (
                  <div className="text-slate-400 group-hover/info:text-orange-500 transition-colors" title={`${req.attachment.split(',').length} Attachment(s)`}>
                    <Paperclip size={10} />
@@ -1392,7 +1449,9 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         </div>
 
         <div className="flex-[1.8] min-w-0 px-2 flex flex-col">
-          <span className="text-xs font-bold text-slate-700 dark:text-slate-300 tracking-tight group-hover:text-slate-900 dark:group-hover:text-white transition-colors block">{req.schoolName}</span>
+          <span className={`text-xs font-bold tracking-tight transition-colors block ${
+            isCancelled ? 'text-slate-500 dark:text-slate-400' : 'text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white'
+          }`}>{req.schoolName}</span>
           {req.school_monitoring_id && (
             <span className="text-[10px] font-mono font-bold text-brand-orange mt-0.5">
               ID: {req.school_monitoring_id}
@@ -1429,19 +1488,26 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         </div>
 
         <div className="flex-1 min-w-0 px-2 whitespace-nowrap flex justify-center">
-          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full w-fit border transition-all duration-300 group-hover:scale-105 whitespace-nowrap ${
-            isDelivered ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-500/20' : 
-            isPartial ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-500/20' :
-            'bg-[#EFF6FF] dark:bg-[#2563EB]/10 text-[#2563EB] dark:text-[#3B82F6] border-[#2563EB]/5'
-          }`}>
-             {isFinalized ? <CheckCircle2 size={12} strokeWidth={2} className="shrink-0" /> : <Clock size={12} strokeWidth={2} className="shrink-0" />}
-             <span className="text-xs font-bold tracking-wide whitespace-nowrap">{getStatusLabel(req.status)}</span>
-          </div>
+          {isCancelled ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full w-fit border whitespace-nowrap bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-500/20">
+              <Ban size={12} strokeWidth={2} className="shrink-0" />
+              <span className="text-xs font-bold tracking-wide whitespace-nowrap">CANCELLED</span>
+            </div>
+          ) : (
+            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full w-fit border transition-all duration-300 group-hover:scale-105 whitespace-nowrap ${
+              isDelivered ? 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-100 dark:border-emerald-500/20' : 
+              isPartial ? 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-100 dark:border-amber-500/20' :
+              'bg-[#EFF6FF] dark:bg-[#2563EB]/10 text-[#2563EB] dark:text-[#3B82F6] border-[#2563EB]/5'
+            }`}>
+               {isFinalized ? <CheckCircle2 size={12} strokeWidth={2} className="shrink-0" /> : <Clock size={12} strokeWidth={2} className="shrink-0" />}
+               <span className="text-xs font-bold tracking-wide whitespace-nowrap">{getStatusLabel(req.status)}</span>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 min-w-0 px-2 whitespace-nowrap flex flex-col items-center justify-center">
           <div className="flex items-center gap-2">
-            <span className={`text-[10px] font-black ${percentage === 100 ? 'text-emerald-500' : percentage > 0 ? 'text-[#2563EB]' : 'text-slate-400'}`}>
+            <span className={`text-[10px] font-black ${isCancelled ? 'text-slate-400' : percentage === 100 ? 'text-emerald-500' : percentage > 0 ? 'text-[#2563EB]' : 'text-slate-400'}`}>
               {percentage}%
             </span>
           </div>
@@ -1450,7 +1516,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               className="h-full transition-all duration-700 rounded-full" 
               style={{ 
                 width: `${percentage}%`,
-                backgroundColor: percentage === 100 ? '#10b981' : percentage > 0 ? '#2563EB' : '#94a3b8'
+                backgroundColor: isCancelled ? '#94a3b8' : percentage === 100 ? '#10b981' : percentage > 0 ? '#2563EB' : '#94a3b8'
               } as any}
             />
           </div>
@@ -1459,13 +1525,14 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         <div className="flex-[2] min-w-0 px-2" onClick={(e) => e.stopPropagation()}>
           <div 
             className="px-2 py-1 flex items-center gap-2 w-fit mx-auto"
-            title="Click a PO Number to manage it"
+            title={isCancelled ? "Action disabled: Request is cancelled" : "Click a PO Number to manage it"}
           >
             {req.poNumber ? (
               renderPODisplay(req.poNumber)
             ) : (
               <button 
                 onClick={() => {
+                  if (isCancelled || userRole === 'Staff') return;
                   const existingEntries = parsePOString(req.poNumber, req.items || []);
                   const newEntry = { id: Math.random().toString(36).substr(2, 9), poNumber: '', supplier: '', itemQuantities: {} };
                   setPoEntries([...existingEntries, newEntry]);
@@ -1473,7 +1540,13 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                   setPoModalRequest(req);
                   setIsPoModalOpen(true);
                 }}
-                className="text-[10px] text-[#2563EB] bg-[#EFF6FF] px-2.5 py-1 rounded-md font-semibold tracking-wide block transition-all hover:scale-105 border border-[#2563EB]/10"
+                disabled={isCancelled || userRole === 'Staff'}
+                className={`text-[10px] px-2.5 py-1 rounded-md font-semibold tracking-wide block transition-all ${
+                  (isCancelled || userRole === 'Staff')
+                    ? 'text-slate-400 dark:text-slate-600 bg-slate-100 dark:bg-slate-800/50 opacity-40 cursor-not-allowed border border-slate-200 dark:border-slate-800'
+                    : 'text-[#2563EB] bg-[#EFF6FF] hover:scale-105 border border-[#2563EB]/10 cursor-pointer'
+                }`}
+                title={isCancelled ? "Action disabled: Request is cancelled" : userRole === 'Staff' ? "Action disabled: Staff role cannot assign PO" : "Assign PO"}
               >
                 Assign PO
               </button>
@@ -1484,14 +1557,55 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
 
         <div className="flex-1 min-w-0 px-2 whitespace-nowrap flex items-center justify-center gap-1 opacity-100 group-hover:opacity-100 transition-all duration-200" onClick={(e) => e.stopPropagation()}>
           {userRole !== 'Staff' ? (
-            isDelivered ? (
-              <button 
-                onClick={() => { setVerificationRequest(req); setIsVerificationModalOpen(true); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] cursor-pointer text-xs font-bold transition-all"
-              >
-                <History size={14} />
-                <span>View History</span>
-              </button>
+            isCancelled ? (
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => { setRequestToUndoCancel(req); setIsUndoCancelModalOpen(true); }}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[#2563EB] dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 cursor-pointer text-xs font-bold transition-all shadow-sm border border-blue-200 dark:border-blue-800/60"
+                  title="Undo Cancel (Restore Request)"
+                >
+                  <RotateCcw size={14} />
+                  <span>Undo</span>
+                </button>
+                <button 
+                  disabled
+                  className="p-1.5 rounded-md text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-30"
+                  title="Action disabled: Request is cancelled"
+                >
+                  <Edit3 size={16} />
+                </button>
+                <button 
+                  disabled
+                  className="p-1.5 rounded-md text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-30"
+                  title="Action disabled: Request is cancelled"
+                >
+                  <Plus size={16} />
+                </button>
+                <button 
+                  disabled
+                  className="p-1.5 rounded-md text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-30"
+                  title="Action disabled: Request is cancelled"
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            ) : isDelivered ? (
+              <div className="flex items-center gap-1">
+                <button 
+                  onClick={() => { setVerificationRequest(req); setIsVerificationModalOpen(true); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] cursor-pointer text-xs font-bold transition-all"
+                >
+                  <History size={14} />
+                  <span>View History</span>
+                </button>
+                <button 
+                  onClick={() => { setRequestToCancel(req); setIsCancelModalOpen(true); }}
+                  className="p-2 transition-all active:scale-95 rounded-md text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:text-slate-500 dark:hover:bg-rose-500/10 cursor-pointer"
+                  title="Cancel Request"
+                >
+                  <Ban size={18} />
+                </button>
+              </div>
             ) : (
               <>
                 {(() => {
@@ -1511,7 +1625,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                           className={`p-2 transition-all active:scale-95 rounded-md ${
                             req.poNumber 
                               ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
-                              : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50 dark:text-slate-600 dark:hover:bg-orange-500/10'
+                              : 'text-gray-500 hover:text-orange-500 hover:bg-orange-50 dark:text-slate-600 dark:hover:bg-orange-500/10 cursor-pointer'
                           }`}
                           title={req.poNumber ? "Locked: Cannot edit request with assigned PO" : "Edit Entry"}
                         >
@@ -1532,7 +1646,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                         className={`p-2 rounded-md transition-all active:scale-95 ${
                           isFullyAllocated 
                             ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
-                            : 'text-gray-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] dark:text-slate-600 dark:hover:bg-[#2563EB]/10'
+                            : 'text-gray-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] dark:text-slate-600 dark:hover:bg-[#2563EB]/10 cursor-pointer'
                         }`}
                         title={isFullyAllocated ? "All items fully allocated to PO(s)" : "Assign/Add PO Number"}
                       >
@@ -1548,8 +1662,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                             (!req.poNumber || percentage === 100) 
                               ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
                               : isPartial 
-                                ? 'text-amber-500 hover:bg-amber-100/50 dark:hover:bg-amber-500/20' 
-                                : 'text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10'
+                                ? 'text-amber-500 hover:bg-amber-100/50 dark:hover:bg-amber-500/20 cursor-pointer' 
+                                : 'text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer'
                           }`}
                           title={!req.poNumber 
                             ? 'Assign PO number first to process deliverables' 
@@ -1567,16 +1681,36 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                     </>
                   );
                 })()}
+
+                {/* Cancel action button */}
+                <button 
+                  onClick={() => { 
+                    setRequestToCancel(req); 
+                    setIsCancelModalOpen(true); 
+                  }}
+                  className="p-2 transition-all active:scale-95 rounded-md text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:text-slate-500 dark:hover:bg-rose-500/10 cursor-pointer"
+                  title="Cancel Request"
+                >
+                  <Ban size={18} />
+                </button>
                 
                 <button 
-                  onClick={() => { setIsBulkDeleting(false); setRequestToDelete(req); setIsDeleteModalOpen(true); }}
-                  disabled={!!req.poNumber}
+                  onClick={() => { 
+                    if (req.poNumber && req.poNumber.trim()) {
+                      showError('Delete Blocked', 'Cannot delete request with an assigned Purchase Order. Please delete/unassign the PO first.');
+                      return;
+                    }
+                    setIsBulkDeleting(false); 
+                    setRequestToDelete(req); 
+                    setIsDeleteModalOpen(true); 
+                  }}
+                  disabled={!!(req.poNumber && req.poNumber.trim())}
                   className={`p-2 transition-all active:scale-95 rounded-md ${
-                    req.poNumber 
+                    (req.poNumber && req.poNumber.trim()) 
                       ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
-                      : 'text-gray-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-600 dark:hover:bg-red-500/10'
+                      : 'text-gray-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-600 dark:hover:bg-red-500/10 cursor-pointer'
                   }`}
-                  title={req.poNumber ? "Locked: Cannot delete request with assigned PO" : "Delete"}
+                  title={(req.poNumber && req.poNumber.trim()) ? "Delete disabled: Please delete/unassign the PO first before deleting this request" : "Delete"}
                 >
                   <Trash2 size={18} />
                 </button>
@@ -1800,6 +1934,15 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
 
     if (isBulkDeleting) {
       if (selectedIds.size === 0) return;
+
+      const requestsWithPo = requests.filter(r => selectedIds.has(r.id) && r.poNumber && r.poNumber.trim());
+      if (requestsWithPo.length > 0) {
+        showError('Delete Blocked', 'Cannot delete requests that have an assigned Purchase Order. Please delete/unassign POs first.');
+        setIsDeleteModalOpen(false);
+        setIsBulkDeleting(false);
+        return;
+      }
+
       setLoading(true);
       try {
         const idsArray = Array.from(selectedIds);
@@ -1862,6 +2005,13 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     }
 
     if (!requestToDelete) return;
+
+    if (requestToDelete.poNumber && requestToDelete.poNumber.trim()) {
+      showError('Delete Blocked', 'Cannot delete request with an assigned Purchase Order. Please delete/unassign the PO first.');
+      setIsDeleteModalOpen(false);
+      return;
+    }
+
     const controlNo = requestToDelete.id;
 
     setDeletingId(controlNo);
@@ -1924,6 +2074,87 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       showError('Error', err.message || 'Failed to delete requisition.');
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!requestToCancel) return;
+    setIsProcessingCancel(true);
+    try {
+      if (isSupabaseConfigured) {
+        const { error } = await supabase
+          .from('item_requests')
+          .update({ status: 'Cancelled' })
+          .eq('control_no', requestToCancel.id);
+        if (error) throw error;
+      }
+
+      setRequests(prev => prev.map(r => r.id === requestToCancel.id ? { ...r, status: 'Cancelled' } : r));
+      if (selectedDetailsRequest && selectedDetailsRequest.id === requestToCancel.id) {
+        setSelectedDetailsRequest(prev => prev ? { ...prev, status: 'Cancelled' } : null);
+      }
+
+      // Sync School Monitoring to clear/re-evaluate Stage 3 date
+      try {
+        await syncSchoolMonitoringWithDRs();
+      } catch (syncErr) {
+        console.warn('Sync school monitoring after cancel error:', syncErr);
+      }
+
+      showSuccess('Request Cancelled', `Item request ${requestToCancel.id} has been marked as cancelled.`);
+      setIsCancelModalOpen(false);
+      setRequestToCancel(null);
+    } catch (err: any) {
+      console.error('Cancel request error:', err);
+      showError('Cancellation Failed', err.message || 'Failed to cancel request.');
+    } finally {
+      setIsProcessingCancel(false);
+    }
+  };
+
+  const handleConfirmUndoCancel = async () => {
+    if (!requestToUndoCancel) return;
+    setIsProcessingCancel(true);
+    try {
+      const itemsList = requestToUndoCancel.items || [];
+      const totalReq = itemsList.reduce((s: number, it: any) => s + (parseInt(it.qty) || 0), 0);
+      const totalRec = itemsList.reduce((s: number, it: any) => s + (parseInt(it.received_quantity) || 0), 0);
+      
+      let restoredStatus: 'Pending' | 'Delivered' | 'Partially Delivered' = 'Pending';
+      if (totalReq > 0 && totalRec >= totalReq) {
+        restoredStatus = 'Delivered';
+      } else if (totalRec > 0) {
+        restoredStatus = 'Partially Delivered';
+      }
+
+      if (isSupabaseConfigured) {
+        const { error } = await supabase
+          .from('item_requests')
+          .update({ status: restoredStatus })
+          .eq('control_no', requestToUndoCancel.id);
+        if (error) throw error;
+      }
+
+      setRequests(prev => prev.map(r => r.id === requestToUndoCancel.id ? { ...r, status: restoredStatus } : r));
+      if (selectedDetailsRequest && selectedDetailsRequest.id === requestToUndoCancel.id) {
+        setSelectedDetailsRequest(prev => prev ? { ...prev, status: restoredStatus } : null);
+      }
+
+      // Sync School Monitoring to re-evaluate Stage 3 date
+      try {
+        await syncSchoolMonitoringWithDRs();
+      } catch (syncErr) {
+        console.warn('Sync school monitoring after restore error:', syncErr);
+      }
+
+      showSuccess('Request Restored', `Item request ${requestToUndoCancel.id} has been restored to active status.`);
+      setIsUndoCancelModalOpen(false);
+      setRequestToUndoCancel(null);
+    } catch (err: any) {
+      console.error('Undo cancel request error:', err);
+      showError('Restore Failed', err.message || 'Failed to restore request.');
+    } finally {
+      setIsProcessingCancel(false);
     }
   };
 
@@ -2071,6 +2302,25 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       );
 
       if (deletedPos.length > 0) {
+        for (const dpo of deletedPos) {
+          const poNum = dpo.poNumber.trim();
+          // Check if transactions exist for this PO or if deliverables have been encoded
+          const { data: txs } = await supabase
+            .from('stock_transactions')
+            .select('id')
+            .eq('reference_id', poModalRequest.id)
+            .ilike('reason', `%PO:${poNum}%`);
+
+          const itemsHasDelivered = (poModalRequest.items || []).some((i: any) => 
+            (parseInt(i.received_quantity as any) || 0) > 0 && 
+            ((dpo.itemQuantities && dpo.itemQuantities[i.item_code] > 0) || !dpo.itemQuantities || Object.keys(dpo.itemQuantities).length === 0)
+          );
+
+          if ((txs && txs.length > 0) || itemsHasDelivered) {
+            throw new Error(`Cannot delete Purchase Order "${poNum}" because deliverables have already been encoded. Please revert/delete deliverables first before deleting the PO.`);
+          }
+        }
+
         console.log(`[PO Revert] Found ${deletedPos.length} deleted POs. Reverting transactions...`);
         for (const dpo of deletedPos) {
           const poNum = dpo.poNumber.trim();
@@ -2193,8 +2443,19 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     }
   };
 
+  const hasPoInSelected = useMemo(() => {
+    return Array.from(selectedIds).some(id => {
+      const r = requests.find(req => req.id === id);
+      return !!(r && r.poNumber && r.poNumber.trim());
+    });
+  }, [selectedIds, requests]);
+
   const triggerBulkDelete = () => {
     if (selectedIds.size === 0) return;
+    if (hasPoInSelected) {
+      showError('Cannot Delete', 'One or more selected requests have an assigned Purchase Order. Please delete/unassign POs first.');
+      return;
+    }
     setIsBulkDeleting(true);
     setRequestToDelete(null); 
     setIsDeleteModalOpen(true);
@@ -2249,7 +2510,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       
       <div className="mx-2 sm:mx-6 lg:mx-12 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6 mb-8 mt-4">
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-          {(['All', 'Pending', 'Partially', 'Completed'] as StatusFilterType[]).map((filter) => (
+          {(['All', 'Pending', 'Partially', 'Completed', 'Cancelled'] as StatusFilterType[]).map((filter) => (
             <button
               key={filter}
               onClick={() => setStatusFilter(filter)}
@@ -2266,7 +2527,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                 boxShadow: statusFilter === filter ? '0 8px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 80%)' : undefined
               }}
             >
-              <span>{filter === 'Partially' ? 'PARTIAL' : filter === 'Completed' ? 'DELIVERED' : filter}</span>
+              <span>{filter === 'Partially' ? 'PARTIAL' : filter === 'Completed' ? 'DELIVERED' : filter === 'Cancelled' ? 'CANCELLED' : filter}</span>
               <span className={`px-1.5 py-0.5 rounded-full text-[8px] font-black ${
                 statusFilter === filter 
                   ? 'bg-white/20 text-white' 
@@ -2675,43 +2936,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           setEditingRequest(null); 
           onNavigate('requests', { openNewRequest: false });
         }} 
-        onSubmit={(newId) => {
+        onSubmit={() => {
           fetchRequests(false);
-          if (!editingRequest && newId) {
-            // Find the new request in the current list or wait for fetch
-            // But fetchRequests(false) is async. 
-            // We can search for it after it completes or just trigger a side effect.
-            // Simplified: we'll handle this in fetchRequests callback or a separate useEffect
-            // For now, let's just trigger the open by looking for the ID after fetch.
-            setTimeout(() => {
-              const findAndOpen = async () => {
-                const { data } = await supabase.from('item_requests').select('*').eq('control_no', newId).single();
-                if (data) {
-                  const req = {
-                    id: data.control_no,
-                    schoolName: data.school_name,
-                    date: data.date,
-                    status: data.status,
-                    program: data.program,
-                    po_number: data.po_number,
-                    requestType: data.request_type,
-                    items: [] // fetch items too?
-                  } as any;
-                  
-                  // Need items for parsePOString
-                  const { data: items } = await supabase.from('item_request_items').select('*').eq('request_id', newId);
-                  req.items = items || [];
-                  req.poNumber = data.po_number;
-                  
-                  const entries = parsePOString(req.poNumber, req.items);
-                  setPoEntries(entries.length > 0 ? entries : [{ id: 1, poNumber: '', supplier: '', itemQuantities: {} }]);
-                  setPoModalRequest(req);
-                  setIsPoModalOpen(true);
-                }
-              };
-              findAndOpen();
-            }, 1000);
-          }
         }}
         initialData={editingRequest || undefined}
         isDarkMode={isDarkMode}
@@ -2756,6 +2982,14 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                 setVerificationRequest(selectedDetailsRequest);
                 setIsVerificationModalOpen(true);
               }}
+              onCancelRequest={(req) => {
+                setRequestToCancel(req);
+                setIsCancelModalOpen(true);
+              }}
+              onUndoCancelRequest={(req) => {
+                setRequestToUndoCancel(req);
+                setIsUndoCancelModalOpen(true);
+              }}
             />
           </>
         )}
@@ -2784,6 +3018,168 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         type="request"
       />
 
+      {/* Cancel Confirmation Modal */}
+      {isCancelModalOpen && requestToCancel && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200" 
+            onClick={() => !isProcessingCancel && setIsCancelModalOpen(false)} 
+          />
+          <div className={`relative w-full max-w-[460px] rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${
+            isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'
+          }`}>
+            <div className="p-8 flex flex-col items-center text-center">
+              <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-inner ${
+                isDarkMode ? 'bg-rose-500/10 text-rose-400' : 'bg-rose-50 text-rose-600'
+              }`}>
+                <Ban size={40} strokeWidth={2.2} />
+              </div>
+              
+              <h3 className={`text-xl font-bold tracking-tight mb-2 ${
+                isDarkMode ? 'text-white' : 'text-slate-900'
+              }`}>
+                Cancel Item Request?
+              </h3>
+              
+              <div className="space-y-3 mb-6">
+                <p className={`text-xs leading-relaxed ${
+                  isDarkMode ? 'text-slate-400' : 'text-slate-500'
+                }`}>
+                  Are you sure you want to cancel request <strong className={isDarkMode ? 'text-white' : 'text-slate-800'}>{requestToCancel.id}</strong> for <strong className={isDarkMode ? 'text-white' : 'text-slate-800'}>{requestToCancel.schoolName}</strong>?
+                </p>
+                <div className={`text-[11px] rounded-2xl p-4 text-left space-y-1.5 border ${
+                  isDarkMode ? 'bg-slate-800/60 border-slate-700/60 text-slate-300' : 'bg-rose-50/50 border-rose-100 text-rose-900'
+                }`}>
+                  <div className="flex items-start gap-2">
+                    <span className="text-rose-500 font-bold">•</span>
+                    <span>The request row will remain visible in a faded state.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-rose-500 font-bold">•</span>
+                    <span>Actions, PO assignment, and delivery updates will be disabled.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-rose-500 font-bold">•</span>
+                    <span>The automated creation date in School Monitoring will be removed.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-rose-500 font-bold">•</span>
+                    <span>You can undo this cancellation anytime to restore the request.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 w-full">
+                <button
+                  type="button"
+                  onClick={() => setIsCancelModalOpen(false)}
+                  disabled={isProcessingCancel}
+                  className={`flex-1 py-3.5 px-4 rounded-xl text-xs font-bold transition-all ${
+                    isDarkMode 
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' 
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  Keep Request
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmCancel}
+                  disabled={isProcessingCancel}
+                  className="flex-1 py-3.5 px-4 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:scale-95 transition-all shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2"
+                >
+                  {isProcessingCancel ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <>
+                      <Ban size={15} />
+                      <span>Cancel Request</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Undo Cancel / Restore Confirmation Modal */}
+      {isUndoCancelModalOpen && requestToUndoCancel && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200" 
+            onClick={() => !isProcessingCancel && setIsUndoCancelModalOpen(false)} 
+          />
+          <div className={`relative w-full max-w-[460px] rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 ${
+            isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'
+          }`}>
+            <div className="p-8 flex flex-col items-center text-center">
+              <div className={`w-20 h-20 rounded-full flex items-center justify-center mb-6 shadow-inner ${
+                isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'
+              }`}>
+                <RotateCcw size={40} strokeWidth={2.2} />
+              </div>
+              
+              <h3 className={`text-xl font-bold tracking-tight mb-2 ${
+                isDarkMode ? 'text-white' : 'text-slate-900'
+              }`}>
+                Restore Item Request?
+              </h3>
+              
+              <div className="space-y-3 mb-6">
+                <p className={`text-xs leading-relaxed ${
+                  isDarkMode ? 'text-slate-400' : 'text-slate-500'
+                }`}>
+                  Are you sure you want to restore request <strong className={isDarkMode ? 'text-white' : 'text-slate-800'}>{requestToUndoCancel.id}</strong> for <strong className={isDarkMode ? 'text-white' : 'text-slate-800'}>{requestToUndoCancel.schoolName}</strong>?
+                </p>
+                <div className={`text-[11px] rounded-2xl p-4 text-left space-y-1.5 border ${
+                  isDarkMode ? 'bg-slate-800/60 border-slate-700/60 text-slate-300' : 'bg-blue-50/50 border-blue-100 text-blue-900'
+                }`}>
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-500 font-bold">•</span>
+                    <span>Re-enables editing, PO assignment, and delivery management.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-blue-500 font-bold">•</span>
+                    <span>Restores the automated creation date in School Monitoring.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 w-full">
+                <button
+                  type="button"
+                  onClick={() => setIsUndoCancelModalOpen(false)}
+                  disabled={isProcessingCancel}
+                  className={`flex-1 py-3.5 px-4 rounded-xl text-xs font-bold transition-all ${
+                    isDarkMode 
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' 
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmUndoCancel}
+                  disabled={isProcessingCancel}
+                  className="flex-1 py-3.5 px-4 rounded-xl text-xs font-bold text-white bg-[#2563EB] hover:bg-blue-700 active:scale-95 transition-all shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2"
+                >
+                  {isProcessingCancel ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <>
+                      <RotateCcw size={15} />
+                      <span>Restore Request</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedIds.size > 0 && (
         <div className="fixed bottom-6 md:bottom-12 left-4 right-4 md:left-1/2 md:-translate-x-1/2 z-[80] bg-[#1a1a1a] px-6 md:px-12 py-4 md:py-6 rounded-[2rem] md:rounded-[3rem] shadow-3xl border border-white/10 flex flex-col md:flex-row items-center justify-center gap-4 md:gap-10 animate-in slide-in-from-bottom-10 duration-500">
            <div className="flex flex-col items-center text-center">
@@ -2802,7 +3198,13 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               </button>
               <button 
                 onClick={triggerBulkDelete}
-                className="flex-grow md:flex-none px-6 md:px-8 py-3 md:py-3.5 bg-red-500 hover:bg-red-600 text-white rounded-xl md:rounded-2xl flex items-center justify-center gap-3 text-[10px] md:text-[11px] font-bold uppercase tracking-widest shadow-2xl shadow-red-500/30 transition-all active:scale-95"
+                disabled={hasPoInSelected}
+                className={`flex-grow md:flex-none px-6 md:px-8 py-3 md:py-3.5 text-white rounded-xl md:rounded-2xl flex items-center justify-center gap-3 text-[10px] md:text-[11px] font-bold uppercase tracking-widest shadow-2xl transition-all active:scale-95 ${
+                  hasPoInSelected
+                    ? 'bg-gray-600/50 text-gray-400 cursor-not-allowed opacity-60 shadow-none'
+                    : 'bg-red-500 hover:bg-red-600 shadow-red-500/30'
+                }`}
+                title={hasPoInSelected ? "Delete disabled: One or more selected requests have an assigned PO. Please delete/unassign POs first." : "Delete Selected"}
               >
                 <Trash2 size={16} md:size={18} />
                 {toTitleCase("Delete")}
@@ -2931,13 +3333,38 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                             </div>
 
                             <div className="flex items-center justify-end lg:pb-1">
-                              <button 
-                                onClick={() => handleRemovePoEntry(entry.id)}
-                                className="group flex items-center gap-2 px-4 py-3 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all font-black text-[10px] uppercase tracking-widest border border-transparent hover:border-red-100 dark:hover:border-red-500/20"
-                              >
-                                <Trash2 size={16} />
-                                <span>Remove</span>
-                              </button>
+                              {(() => {
+                                const reqHasDeliverables = (poModalRequest.items || []).some((item: any) => (parseInt(item.received_quantity) || 0) > 0) || poModalRequest.status === 'Delivered' || poModalRequest.status === 'Partially Delivered';
+                                const poEntryHasDeliverables = reqHasDeliverables && (
+                                  (poModalRequest.items || []).some((item: any) => {
+                                    const recQty = parseInt(item.received_quantity) || 0;
+                                    return recQty > 0 && ((entry.itemQuantities && entry.itemQuantities[item.item_code] > 0) || !entry.itemQuantities || Object.keys(entry.itemQuantities).length === 0);
+                                  }) || poModalRequest.status === 'Delivered'
+                                );
+
+                                return (
+                                  <button 
+                                    type="button"
+                                    onClick={() => {
+                                      if (poEntryHasDeliverables) {
+                                        showError('Action Blocked', `Cannot delete PO "${entry.poNumber || 'this PO'}" because deliverables have already been encoded. Please revert deliverables first.`);
+                                        return;
+                                      }
+                                      handleRemovePoEntry(entry.id);
+                                    }}
+                                    disabled={poEntryHasDeliverables}
+                                    className={`group flex items-center gap-2 px-4 py-3 rounded-xl transition-all font-black text-[10px] uppercase tracking-widest border ${
+                                      poEntryHasDeliverables
+                                        ? 'text-gray-300 dark:text-slate-700 border-gray-200 dark:border-slate-800 cursor-not-allowed opacity-50'
+                                        : 'text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 border-transparent hover:border-red-100 dark:hover:border-red-500/20'
+                                    }`}
+                                    title={poEntryHasDeliverables ? `Cannot delete PO "${entry.poNumber || 'this PO'}": Deliverables have already been encoded.` : "Remove PO"}
+                                  >
+                                    <Trash2 size={16} />
+                                    <span>Remove</span>
+                                  </button>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -3242,23 +3669,36 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                     </span>
                   </button>
 
-                  {poEntries.length > 0 && (
-                    <button 
-                      onClick={() => {
-                        setPoEntries([]);
-                        setSelectedItemCodeForPo(null);
-                        setIsPoDropdownOpen(false);
-                      }}
-                      className={`w-full py-4 rounded-[2rem] border-2 border-dashed flex items-center justify-center gap-3 transition-all group ${
-                        isDarkMode 
-                          ? 'border-red-900/30 text-red-500/70 hover:border-red-500 hover:text-red-500 hover:bg-red-500/5' 
-                          : 'border-red-100 text-red-400 hover:border-red-400 hover:text-red-500 hover:bg-red-50'
-                      }`}
-                    >
-                      <Trash2 size={18} className="group-hover:scale-110 transition-transform" />
-                      <span className="text-xs font-black uppercase tracking-widest group-hover:text-red-500">Remove All Purchase Orders</span>
-                    </button>
-                  )}
+                  {poEntries.length > 0 && (() => {
+                    const reqHasDeliverables = (poModalRequest.items || []).some((item: any) => (parseInt(item.received_quantity) || 0) > 0) || poModalRequest.status === 'Delivered' || poModalRequest.status === 'Partially Delivered';
+
+                    return (
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          if (reqHasDeliverables) {
+                            showError('Action Blocked', 'Cannot remove Purchase Orders because deliverables have already been encoded for this request. Please revert deliverables first.');
+                            return;
+                          }
+                          setPoEntries([]);
+                          setSelectedItemCodeForPo(null);
+                          setIsPoDropdownOpen(false);
+                        }}
+                        disabled={reqHasDeliverables}
+                        className={`w-full py-4 rounded-[2rem] border-2 border-dashed flex items-center justify-center gap-3 transition-all group ${
+                          reqHasDeliverables
+                            ? 'border-gray-200 text-gray-300 dark:border-slate-800 dark:text-slate-700 cursor-not-allowed opacity-50'
+                            : isDarkMode 
+                              ? 'border-red-900/30 text-red-500/70 hover:border-red-500 hover:text-red-500 hover:bg-red-500/5' 
+                              : 'border-red-100 text-red-400 hover:border-red-400 hover:text-red-500 hover:bg-red-50'
+                        }`}
+                        title={reqHasDeliverables ? "Cannot remove Purchase Orders: Deliverables have already been encoded." : "Remove All Purchase Orders"}
+                      >
+                        <Trash2 size={18} className="group-hover:scale-110 transition-transform" />
+                        <span className="text-xs font-black uppercase tracking-widest group-hover:text-red-500">Remove All Purchase Orders</span>
+                      </button>
+                    );
+                  })()}
                 </div>
               )}
             </div>
