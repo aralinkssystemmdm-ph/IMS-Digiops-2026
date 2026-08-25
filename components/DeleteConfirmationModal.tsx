@@ -11,7 +11,7 @@ interface DeleteConfirmationModalProps {
   isDeleting: boolean;
   itemCount?: number;
   isDarkMode?: boolean;
-  type?: 'request' | 'item' | 'school' | 'bundle';
+  type?: 'request' | 'item' | 'school' | 'bundle' | 'monitoring';
 }
 
 const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({
@@ -35,6 +35,7 @@ const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({
       case 'item': return 'Are you sure you want to delete this item?';
       case 'school': return 'Delete Partner?';
       case 'bundle': return 'Delete Bundle?';
+      case 'monitoring': return 'Delete Monitoring Record?';
       default: return 'Delete Request?';
     }
   };
@@ -44,6 +45,7 @@ const DeleteConfirmationModal: React.FC<DeleteConfirmationModalProps> = ({
       case 'item': return 'item code';
       case 'school': return 'partner';
       case 'bundle': return 'bundle';
+      case 'monitoring': return 'monitoring record';
       default: return 'request';
     }
   };

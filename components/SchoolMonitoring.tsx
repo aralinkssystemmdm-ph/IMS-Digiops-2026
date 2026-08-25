@@ -3,11 +3,12 @@ import {
   Search, Plus, Trash2, Edit3, ChevronDown, ChevronUp, Loader2, 
   Calendar, FileText, ShoppingCart, Truck, School, User, 
   Settings, CheckCircle2, AlertCircle, X, Layers, Bell, ClipboardList, AppWindow, Play,
-  Download, RefreshCw, Sparkles, PackageCheck, Package
+  Download, RefreshCw, Sparkles, PackageCheck, Package, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { toTitleCase, getProgramBadgeClass } from '../lib/utils';
 import { useNotification } from './NotificationProvider';
+import DeleteConfirmationModal from './DeleteConfirmationModal';
 
 interface DesignatedHardwareItem {
   item_code: string;
@@ -202,6 +203,55 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<number | null>(null);
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+
+  // Item requests transaction tracking (for conditional delete button)
+  const [itemRequests, setItemRequests] = useState<any[]>([]);
+
+  // Delete Confirmation Modal states
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [recordToDelete, setRecordToDelete] = useState<SchoolMonitoringRecord | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Sorting state (default: descending by School Monitoring ID)
+  type SortField = 'school_monitoring_id' | 'customer_code' | 'school_name' | 'program' | 'sales_team' | 'class_opening' | 'target_deployment_date' | 'status';
+  const [sortField, setSortField] = useState<SortField>('school_monitoring_id');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection(field === 'school_monitoring_id' ? 'desc' : 'asc');
+    }
+  };
+
+  // Check if a school monitoring record has an item request transaction
+  const hasItemRequestTransaction = useCallback((record: SchoolMonitoringRecord) => {
+    if (!record) return false;
+    const smId = (record.school_monitoring_id || '').trim().toUpperCase();
+    const schoolName = (record.school_name || '').trim().toLowerCase();
+
+    return itemRequests.some((ir: any) => {
+      // Ignore deleted, rejected, or archived item requests
+      if (ir.status === 'Deleted' || ir.status === 'Rejected' || ir.archived_at) return false;
+
+      // Match by school_monitoring_id
+      if (smId && ir.school_monitoring_id && ir.school_monitoring_id.trim().toUpperCase() === smId) {
+        return true;
+      }
+
+      // Match by school_name
+      if (schoolName && ir.school_name) {
+        const irSchool = ir.school_name.trim().toLowerCase();
+        if (irSchool === schoolName || irSchool.split(',').map((s: string) => s.trim().toLowerCase()).includes(schoolName)) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+  }, [itemRequests]);
 
   // Status popup modal states
   const [activeStatusEditRecord, setActiveStatusEditRecord] = useState<SchoolMonitoringRecord | null>(null);
@@ -750,8 +800,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         try {
           const { data: irData } = await supabase
             .from('item_requests')
-            .select('id, control_no, school_monitoring_id, date, created_at, school_name, status')
-            .not('status', 'in', '("Deleted","Rejected","Cancelled")');
+            .select('id, control_no, school_monitoring_id, date, created_at, school_name, status, archived_at');
           if (irData) {
             itemRequestsList = irData;
           }
@@ -768,6 +817,25 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         }
       }
 
+      // Merge local storage item requests as fallback
+      try {
+        const localIR = localStorage.getItem('aralinks_requests') || localStorage.getItem('aralinks_item_requests');
+        if (localIR) {
+          const parsed = JSON.parse(localIR);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((lir: any) => {
+              const id = lir.id || lir.control_no;
+              if (!itemRequestsList.some(ir => (ir.control_no || ir.id) === id)) {
+                itemRequestsList.push(lir);
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to parse local item requests:', e);
+      }
+
+      setItemRequests(itemRequestsList);
       setRecords(monitoringData);
 
       // Sync in-memory records with the newest DR receipts status & dates AND item requests stage 3 & 4
@@ -962,6 +1030,26 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   useEffect(() => {
     fetchInitialData();
   }, [fetchInitialData]);
+
+  // Realtime subscription to item_requests table so delete button reactive state updates automatically
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const channel = supabase
+      .channel('school_monitoring_item_requests_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'item_requests' }, () => {
+        supabase
+          .from('item_requests')
+          .select('id, control_no, school_monitoring_id, date, created_at, school_name, status, archived_at')
+          .then(({ data }) => {
+            if (data) setItemRequests(data);
+          });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   // Persists monitoring data
   const persistRecords = async (newRecords: SchoolMonitoringRecord[], singleRecordToUpsert?: SchoolMonitoringRecord | null, bypassDBSync: boolean = false) => {
@@ -1227,11 +1315,19 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     automateStages(record.school_name);
   };
 
-  // Delete Action
-  const handleDeleteRecord = async (id: string, e: React.MouseEvent) => {
+  // Delete Action - opens confirmation modal
+  const handleDeleteClick = (record: SchoolMonitoringRecord, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this monitoring record?')) {
-      const recordToDelete = records.find(r => r.id === id);
+    setRecordToDelete(record);
+    setIsDeleteModalOpen(true);
+  };
+
+  // Confirm delete handler
+  const handleConfirmDelete = async () => {
+    if (!recordToDelete) return;
+    setIsDeleting(true);
+    try {
+      const id = recordToDelete.id;
       const newRecs = records.filter(r => r.id !== id);
       
       // If synced DB is configured, attempt to delete
@@ -1240,7 +1336,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
           if (isUUID) {
             await supabase.from('school_monitoring').delete().eq('id', id);
-          } else if (recordToDelete && recordToDelete.customer_code) {
+          }
+          if (recordToDelete.school_monitoring_id) {
+            await supabase.from('school_monitoring').delete().eq('school_monitoring_id', recordToDelete.school_monitoring_id);
+          }
+          if (recordToDelete.customer_code) {
             await supabase.from('school_monitoring').delete().eq('customer_code', recordToDelete.customer_code);
           }
         } catch (err) {
@@ -1250,7 +1350,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       
       await persistRecords(newRecs, null, true);
       if (selectedRecordId === id) setSelectedRecordId(null);
-      showSuccess('Deleted Record', 'School monitoring record has been deleted');
+      showSuccess('Deleted Record', `School monitoring record for "${recordToDelete.school_name}" has been deleted`);
+    } catch (err: any) {
+      showError('Delete Failed', err?.message || 'Could not delete school monitoring record');
+    } finally {
+      setIsDeleting(false);
+      setIsDeleteModalOpen(false);
+      setRecordToDelete(null);
     }
   };
 
@@ -1467,7 +1573,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     return Array.from(set).sort();
   }, [records]);
 
-  // Filter list
+  // Filter and sort list
   const filteredRecords = useMemo(() => {
     let result = records;
     if (selectedStatusFilter !== null) {
@@ -1479,15 +1585,80 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     if (selectedSalesTeamFilter !== 'ALL') {
       result = result.filter(r => r.sales_team === selectedSalesTeamFilter);
     }
-    if (!searchQuery) return result;
-    const query = searchQuery.toLowerCase();
-    return result.filter(r => 
-      r.school_name.toLowerCase().includes(query) ||
-      (r.program && r.program.toLowerCase().includes(query)) ||
-      r.customer_code.toLowerCase().includes(query) ||
-      r.sales_team.toLowerCase().includes(query)
-    );
-  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedSalesTeamFilter]);
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(r => 
+        r.school_name.toLowerCase().includes(query) ||
+        (r.program && r.program.toLowerCase().includes(query)) ||
+        r.customer_code.toLowerCase().includes(query) ||
+        r.sales_team.toLowerCase().includes(query) ||
+        (r.school_monitoring_id && r.school_monitoring_id.toLowerCase().includes(query))
+      );
+    }
+
+    return [...result].sort((a, b) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'school_monitoring_id': {
+          const idA = a.school_monitoring_id || '';
+          const idB = b.school_monitoring_id || '';
+          comparison = idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'customer_code': {
+          const codeA = a.customer_code || '';
+          const codeB = b.customer_code || '';
+          comparison = codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'school_name': {
+          const nameA = a.school_name || '';
+          const nameB = b.school_name || '';
+          comparison = nameA.localeCompare(nameB);
+          break;
+        }
+        case 'program': {
+          const progA = a.program || '';
+          const progB = b.program || '';
+          comparison = progA.localeCompare(progB);
+          break;
+        }
+        case 'sales_team': {
+          const teamA = a.sales_team || '';
+          const teamB = b.sales_team || '';
+          comparison = teamA.localeCompare(teamB);
+          break;
+        }
+        case 'class_opening': {
+          const dateA = a.class_opening ? new Date(a.class_opening).getTime() : 0;
+          const dateB = b.class_opening ? new Date(b.class_opening).getTime() : 0;
+          if (isNaN(dateA) || isNaN(dateB)) {
+            comparison = (a.class_opening || '').localeCompare(b.class_opening || '');
+          } else {
+            comparison = dateA - dateB;
+          }
+          break;
+        }
+        case 'target_deployment_date': {
+          const dateA = a.target_deployment_date ? new Date(a.target_deployment_date).getTime() : 0;
+          const dateB = b.target_deployment_date ? new Date(b.target_deployment_date).getTime() : 0;
+          if (isNaN(dateA) || isNaN(dateB)) {
+            comparison = (a.target_deployment_date || '').localeCompare(b.target_deployment_date || '');
+          } else {
+            comparison = dateA - dateB;
+          }
+          break;
+        }
+        case 'status': {
+          comparison = (a.status || 0) - (b.status || 0);
+          break;
+        }
+        default:
+          comparison = 0;
+      }
+      return sortDirection === 'desc' ? -comparison : comparison;
+    });
+  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedSalesTeamFilter, sortField, sortDirection]);
 
   // Filtered equipment catalog items
   const filteredEquipment = useMemo(() => {
@@ -1789,15 +1960,135 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">School Monitoring ID</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Customer Code</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">School Name</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Program</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Sales Team</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Class Opening</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Target Date</th>
-                    <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider">Deployment Status</th>
+                  <tr className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 select-none">
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('school_monitoring_id')}
+                      title="Sort by School Monitoring ID"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>School Monitoring ID</span>
+                        <div className={`transition-all duration-200 ${sortField === 'school_monitoring_id' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'school_monitoring_id' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('customer_code')}
+                      title="Sort by Customer Code"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Customer Code</span>
+                        <div className={`transition-all duration-200 ${sortField === 'customer_code' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'customer_code' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('school_name')}
+                      title="Sort by School Name"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>School Name</span>
+                        <div className={`transition-all duration-200 ${sortField === 'school_name' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'school_name' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('program')}
+                      title="Sort by Program"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Program</span>
+                        <div className={`transition-all duration-200 ${sortField === 'program' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'program' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('sales_team')}
+                      title="Sort by Sales Team"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Sales Team</span>
+                        <div className={`transition-all duration-200 ${sortField === 'sales_team' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'sales_team' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('class_opening')}
+                      title="Sort by Class Opening"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Class Opening</span>
+                        <div className={`transition-all duration-200 ${sortField === 'class_opening' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'class_opening' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('target_deployment_date')}
+                      title="Sort by Target Date"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Target Date</span>
+                        <div className={`transition-all duration-200 ${sortField === 'target_deployment_date' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'target_deployment_date' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('status')}
+                      title="Sort by Deployment Status"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Deployment Status</span>
+                        <div className={`transition-all duration-200 ${sortField === 'status' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'status' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
                     <th className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider text-center">Action</th>
                   </tr>
                 </thead>
@@ -1881,13 +2172,15 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                                   >
                                     <Edit3 size={13} />
                                   </button>
-                                  <button
-                                    onClick={(e) => handleDeleteRecord(record.id, e)}
-                                    className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/15 transition-all cursor-pointer"
-                                    title="Remove and archive"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
+                                  {!hasItemRequestTransaction(record) && (
+                                    <button
+                                      onClick={(e) => handleDeleteClick(record, e)}
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-100 dark:hover:bg-red-500/15 transition-all cursor-pointer"
+                                      title="Delete monitoring record"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  )}
                                 </>
                               ) : (
                                 <button
@@ -3403,6 +3696,23 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           }
         }
       `}</style>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeleting) {
+            setIsDeleteModalOpen(false);
+            setRecordToDelete(null);
+          }
+        }}
+        onConfirm={handleConfirmDelete}
+        controlNo={recordToDelete?.school_monitoring_id || recordToDelete?.customer_code || 'Monitoring Record'}
+        schoolName={recordToDelete?.school_name || ''}
+        isDeleting={isDeleting}
+        isDarkMode={isDarkMode}
+        type="monitoring"
+      />
 
     </div>
   );

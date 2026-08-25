@@ -39,13 +39,7 @@ const SerialNumberEntryPage: React.FC = () => {
   const [nonSerializedItems, setNonSerializedItems] = useState<any[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [deliveredDate, setDeliveredDate] = useState<string>(() => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  });
+  const [deliveredDate, setDeliveredDate] = useState<string>('');
 
   // Calculate Summary Stats
   const stats = useMemo(() => {
@@ -383,8 +377,9 @@ const SerialNumberEntryPage: React.FC = () => {
     try {
       const currentUser = localStorage.getItem('aralinks_user') || 'System';
       const now = new Date().toISOString();
-      const timePart = now.split('T')[1] || '12:00:00.000Z';
-      const resolvedDeliveredAt = `${deliveredDate}T${timePart}`;
+      const [year, month, day] = deliveredDate.split('-').map(Number);
+      const deliveryDateObj = new Date(year, month - 1, day, 12, 0, 0);
+      const resolvedDeliveredAt = deliveryDateObj.toISOString();
 
       // 1. Process Non-Serialized Items
       for (const item of nonSerializedItems) {
@@ -814,7 +809,7 @@ const SerialNumberEntryPage: React.FC = () => {
                     onChange={(e) => setDeliveredDate(e.target.value)}
                     className="w-full h-11 px-4 bg-slate-50/50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-700 dark:text-white outline-none focus:border-[#FE4E02] focus:ring-4 focus:ring-[#FE4E02]/5 transition-all"
                   />
-                  <p className="text-[10px] text-gray-400 font-medium px-1">Required: Enter the actual date of delivery (default is today).</p>
+                  <p className="text-[10px] text-gray-400 font-medium px-1">Required: Select the actual date of delivery.</p>
                 </div>
               </div>
             </div>

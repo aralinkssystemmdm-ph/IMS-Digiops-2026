@@ -1571,6 +1571,35 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                   />
                 </div>
               </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">{toTitleCase("Remarks / Additional Notes")}</label>
+                <div className="relative group">
+                  <textarea 
+                    placeholder="Any special instructions or comments... (Optional)"
+                    value={remarks || ''} 
+                    onChange={(e) => setRemarks(e.target.value)} 
+                    className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-white outline-none transition-all shadow-sm font-medium resize-none h-20 focus:ring-2" 
+                    style={{ 
+                      '--tw-ring-color': 'color-mix(in srgb, var(--brand-accent), transparent 80%)'
+                    } as any}
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = 'var(--brand-accent)';
+                      const icon = e.currentTarget.nextElementSibling;
+                      if (icon) (icon as HTMLElement).style.color = 'var(--brand-accent)';
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '';
+                      const icon = e.currentTarget.nextElementSibling;
+                      if (icon) (icon as HTMLElement).style.color = '';
+                    }}
+                  />
+                  <Notebook 
+                    className="absolute right-3 top-3 text-slate-300 dark:text-slate-600 transition-colors pointer-events-none" 
+                    size={16} 
+                  />
+                </div>
+              </div>
             </div>
 
             {/* PO Number is hidden as per request */}
@@ -1826,35 +1855,6 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
                   </div>
                 </div>
               )}
-
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">{toTitleCase("Remarks / Additional Notes")}</label>
-                <div className="relative group">
-                  <textarea 
-                    placeholder="Any special instructions or comments... (Optional)"
-                    value={remarks || ''} 
-                    onChange={(e) => setRemarks(e.target.value)} 
-                    className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-white outline-none transition-all shadow-sm font-medium resize-none h-20 focus:ring-2" 
-                    style={{ 
-                      '--tw-ring-color': 'color-mix(in srgb, var(--brand-accent), transparent 80%)'
-                    } as any}
-                    onFocus={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--brand-accent)';
-                      const icon = e.currentTarget.nextElementSibling;
-                      if (icon) (icon as HTMLElement).style.color = 'var(--brand-accent)';
-                    }}
-                    onBlur={(e) => {
-                      e.currentTarget.style.borderColor = '';
-                      const icon = e.currentTarget.nextElementSibling;
-                      if (icon) (icon as HTMLElement).style.color = '';
-                    }}
-                  />
-                  <Notebook 
-                    className="absolute right-3 top-3 text-slate-300 dark:text-slate-600 transition-colors pointer-events-none" 
-                    size={16} 
-                  />
-                </div>
-              </div>
             </div>
 
 

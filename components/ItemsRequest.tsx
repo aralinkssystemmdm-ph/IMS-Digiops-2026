@@ -842,7 +842,7 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
         </div>
       </div>
 
-      {/* Footer Actions */}
+       {/* Footer Actions */}
       <div className={`p-6 border-t shrink-0 flex flex-col-reverse gap-3 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
          {userRole !== 'Staff' && (
            <>
@@ -856,7 +856,7 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                  </button>
                )
              ) : (
-               onCancelRequest && (
+               !(request.status === 'Delivered' || request.status === 'Partially Delivered') && onCancelRequest && (
                  <button 
                    onClick={() => onCancelRequest(request)}
                    className="w-full flex items-center justify-center gap-2 px-3 py-3 rounded-xl border border-rose-500/30 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 text-[10px] font-black uppercase tracking-widest hover:bg-rose-100 dark:hover:bg-rose-900/40 transition-all cursor-pointer shadow-sm"
@@ -1598,13 +1598,6 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                   <History size={14} />
                   <span>View History</span>
                 </button>
-                <button 
-                  onClick={() => { setRequestToCancel(req); setIsCancelModalOpen(true); }}
-                  className="p-2 transition-all active:scale-95 rounded-md text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:text-slate-500 dark:hover:bg-rose-500/10 cursor-pointer"
-                  title="Cancel Request"
-                >
-                  <Ban size={18} />
-                </button>
               </div>
             ) : (
               <>
@@ -1682,17 +1675,19 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                   );
                 })()}
 
-                {/* Cancel action button */}
-                <button 
-                  onClick={() => { 
-                    setRequestToCancel(req); 
-                    setIsCancelModalOpen(true); 
-                  }}
-                  className="p-2 transition-all active:scale-95 rounded-md text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:text-slate-500 dark:hover:bg-rose-500/10 cursor-pointer"
-                  title="Cancel Request"
-                >
-                  <Ban size={18} />
-                </button>
+                {/* Cancel action button - Hidden if Partial or Delivered */}
+                {!isDelivered && !isPartial && (
+                  <button 
+                    onClick={() => { 
+                      setRequestToCancel(req); 
+                      setIsCancelModalOpen(true); 
+                    }}
+                    className="p-2 transition-all active:scale-95 rounded-md text-gray-400 hover:text-rose-500 hover:bg-rose-50 dark:text-slate-500 dark:hover:bg-rose-500/10 cursor-pointer"
+                    title="Cancel Request"
+                  >
+                    <Ban size={18} />
+                  </button>
+                )}
                 
                 <button 
                   onClick={() => { 

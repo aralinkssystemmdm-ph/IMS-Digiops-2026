@@ -139,6 +139,13 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
           .update({ created_at: newIso })
           .in('id', txIds);
         if (error) throw error;
+
+        if (request?.id) {
+          await supabase
+            .from('item_requests')
+            .update({ delivered_at: newIso })
+            .eq('control_no', request.id);
+        }
       }
 
       setHistory(prev =>
