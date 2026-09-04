@@ -61,6 +61,7 @@ const ArchivedRequestsList: React.FC<ArchivedRequestsListProps> = ({ isDarkMode 
           ticketNo: req.ticket_no,
           schoolName: req.school_name,
           requestType: req.request_type,
+          team: req.team || (req.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks'),
           date: req.date, 
           requestedBy: req.requested_by,
           archiverName: req.archived_by || 'Admin',

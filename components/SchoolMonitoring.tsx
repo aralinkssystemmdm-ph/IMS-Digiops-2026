@@ -6,7 +6,7 @@ import {
   Download, RefreshCw, Sparkles, PackageCheck, Package, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { toTitleCase, getProgramBadgeClass } from '../lib/utils';
+import { toTitleCase, getProgramBadgeClass, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import { useNotification } from './NotificationProvider';
 import DeleteConfirmationModal from './DeleteConfirmationModal';
 
@@ -193,8 +193,16 @@ const renderCustomStepIcon = (step: number, isActive: boolean) => {
 
 const MOCK_MONITORING_RECORDS: SchoolMonitoringRecord[] = [];
 
-export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: string | null }> = ({ isDarkMode = false, userRole = localStorage.getItem('aralinks_role') || 'Staff' }) => {
+export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: string | null; userTeam?: string | null }> = ({ 
+  isDarkMode = false, 
+  userRole = localStorage.getItem('aralinks_role') || 'Staff',
+  userTeam = null
+}) => {
   const { showSuccess, showError, showInfo } = useNotification();
+  const assignedTeams = useMemo(() => parseAssignedTeams(userTeam || localStorage.getItem('aralinks_team')), [userTeam]);
+  const isSingleTeam = userRole !== 'Super admin' && assignedTeams.length === 1;
+  const initialTeamFilter = isSingleTeam ? assignedTeams[0] : 'ALL';
+
   const [records, setRecords] = useState<SchoolMonitoringRecord[]>([]);
   const [schools, setSchools] = useState<SchoolOption[]>([]);
   const [inventory, setInventory] = useState<InventoryOption[]>([]);
@@ -214,7 +222,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Sorting state (default: descending by School Monitoring ID)
-  type SortField = 'school_monitoring_id' | 'customer_code' | 'school_name' | 'program' | 'sales_team' | 'class_opening' | 'target_deployment_date' | 'status';
+  type SortField = 'school_monitoring_id' | 'customer_code' | 'school_name' | 'team' | 'program' | 'sales_team' | 'class_opening' | 'target_deployment_date' | 'status';
   const [sortField, setSortField] = useState<SortField>('school_monitoring_id');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
@@ -349,7 +357,20 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [showEquipmentSuggestions, setShowEquipmentSuggestions] = useState(false);
   const [selectedProgramFilter, setSelectedProgramFilter] = useState('ALL');
   const [selectedSalesTeamFilter, setSelectedSalesTeamFilter] = useState('ALL');
-  const [teamFilter, setTeamFilter] = useState('ALL');
+  const [teamFilter, setTeamFilter] = useState(initialTeamFilter);
+
+  useEffect(() => {
+    if (isSingleTeam) {
+      setTeamFilter(assignedTeams[0]);
+    }
+  }, [isSingleTeam, assignedTeams]);
+
+  const availableTeamFilters = useMemo(() => {
+    if (isSingleTeam) {
+      return [assignedTeams[0]];
+    }
+    return ['ALL', 'Aralinks', 'Protrack'];
+  }, [isSingleTeam, assignedTeams]);
 
   // Multiplier modal states for bundle dispatch
   const [isMultiplierModalOpen, setIsMultiplierModalOpen] = useState(false);
@@ -1553,9 +1574,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
 
   // Records filtered by team for status overview calculations
   const teamFilteredRecords = useMemo(() => {
-    if (teamFilter === 'ALL' || teamFilter === 'All Teams') return records;
-    return records.filter(r => r.team && r.team.toLowerCase() === teamFilter.toLowerCase());
-  }, [records, teamFilter]);
+    return records.filter(r => {
+      const rTeam = r.team || 'Aralinks';
+      if (!isTeamAccessible(rTeam, userTeam, userRole)) return false;
+      if (teamFilter === 'ALL' || teamFilter === 'All Teams') return true;
+      return rTeam.toLowerCase() === teamFilter.toLowerCase();
+    });
+  }, [records, teamFilter, userTeam, userRole]);
 
   // Calculated counts per status (aligned with active team filter)
   const countsPerStatus = useMemo(() => {
@@ -1590,7 +1615,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
 
   // Filter and sort list
   const filteredRecords = useMemo(() => {
-    let result = records;
+    let result = records.filter(r => isTeamAccessible(r.team || 'Aralinks', userTeam, userRole));
     if (selectedStatusFilter !== null) {
       result = result.filter(r => r.status === selectedStatusFilter);
     }
@@ -1600,8 +1625,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     if (selectedSalesTeamFilter !== 'ALL') {
       result = result.filter(r => r.sales_team === selectedSalesTeamFilter);
     }
-    if (teamFilter !== 'ALL') {
-      result = result.filter(r => r.team && r.team.toLowerCase() === teamFilter.toLowerCase());
+    if (teamFilter !== 'ALL' && teamFilter !== 'All Teams') {
+      result = result.filter(r => (r.team || 'Aralinks').toLowerCase() === teamFilter.toLowerCase());
     }
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -1633,6 +1658,12 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           const nameA = a.school_name || '';
           const nameB = b.school_name || '';
           comparison = nameA.localeCompare(nameB);
+          break;
+        }
+        case 'team': {
+          const teamA = (a.team || 'Aralinks').toLowerCase();
+          const teamB = (b.team || 'Aralinks').toLowerCase();
+          comparison = teamA.localeCompare(teamB);
           break;
         }
         case 'program': {
@@ -1805,7 +1836,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               {/* Team Filter align with School Current Status */}
               <div className="flex items-center gap-2 flex-wrap">
                 <div className={`flex items-center p-1 rounded-xl border ${isDarkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
-                  {['ALL', 'Aralinks', 'Protrack'].map((t) => (
+                  {availableTeamFilters.map((t) => (
                     <button
                       key={t}
                       onClick={() => setTeamFilter(t)}

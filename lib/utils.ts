@@ -1,4 +1,45 @@
 
+export function parseAssignedTeams(teamStr: string | null | undefined): string[] {
+  if (!teamStr) return ['Aralinks'];
+  const rawParts = teamStr.split(/[,;/|]+/).map(p => p.trim()).filter(Boolean);
+  const result: string[] = [];
+
+  for (const part of rawParts) {
+    const lower = part.toLowerCase();
+    let canonical = '';
+    if (lower === 'aralinks' || lower === 'aralink') {
+      canonical = 'Aralinks';
+    } else if (lower === 'protrack' || lower === 'pro-track' || lower === 'pro track') {
+      canonical = 'Protrack';
+    } else if (part.length > 0) {
+      canonical = toTitleCase(part);
+    }
+
+    if (canonical && !result.some(existing => existing.toLowerCase() === canonical.toLowerCase())) {
+      result.push(canonical);
+    }
+  }
+
+  return result.length > 0 ? result : ['Aralinks'];
+}
+
+export function isTeamAccessible(
+  itemTeam: string | null | undefined, 
+  userTeam: string | null | undefined, 
+  userRole?: string | null
+): boolean {
+  if (userRole === 'Super admin' || userRole === 'Super Admin') return true;
+  
+  const assigned = parseAssignedTeams(userTeam);
+  // If user has access to both main teams, allow all
+  if (assigned.some(t => t.toLowerCase() === 'aralinks') && assigned.some(t => t.toLowerCase() === 'protrack')) {
+    return true;
+  }
+
+  const cleanItemTeam = (itemTeam || 'Aralinks').trim().toLowerCase();
+  return assigned.some(t => t.toLowerCase() === cleanItemTeam);
+}
+
 export function toTitleCase(text: string) {
   return text.replace(/\w\S*/g, (word) =>
     word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()

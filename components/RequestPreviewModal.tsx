@@ -153,10 +153,20 @@ const RequestPreviewModal: React.FC<RequestPreviewModalProps> = ({ isOpen, onClo
 
               <div className="flex justify-center gap-10 text-[11px] font-bold">
                 <div className="flex items-center gap-2">
-                   <div className="w-5 h-5 border border-black flex items-center justify-center text-[10px] font-black leading-none bg-black text-white">
+                   <div className={`w-5 h-5 border border-black flex items-center justify-center text-[10px] font-black leading-none ${
+                     (request.team === 'Aralinks' || (!request.team && request.requestType === 'ARALINKS')) ? 'bg-black text-white' : 'bg-transparent text-transparent'
+                   }`}>
                     X
                    </div>
                    <span className="tracking-wider">ARALINKS</span>
+                </div>
+                <div className="flex items-center gap-2">
+                   <div className={`w-5 h-5 border border-black flex items-center justify-center text-[10px] font-black leading-none ${
+                     (request.team === 'Protrack' || (!request.team && request.requestType === 'SMS-PROTRACK')) ? 'bg-black text-white' : 'bg-transparent text-transparent'
+                   }`}>
+                    X
+                   </div>
+                   <span className="tracking-wider">SMS-PROTRACK</span>
                 </div>
               </div>
             </div>

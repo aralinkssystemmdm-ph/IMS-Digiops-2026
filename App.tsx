@@ -1065,7 +1065,7 @@ const App: React.FC = () => {
         <Route path="delivery-receipt/edit/:drId" element={<CreateDeliveryReceiptPage isDarkMode={isDarkMode} />} />
         <Route path="fixed-assets" element={<AcknowledgementReceiptManagement isDarkMode={isDarkMode} userRole={userRole} />} />
         <Route path="archived" element={<Archived isDarkMode={isDarkMode} userRole={userRole} />} />
-        <Route path="users" element={<Users isDarkMode={isDarkMode} userRole={userRole} />} />
+        <Route path="users" element={<Users isDarkMode={isDarkMode} userRole={userRole} currentUsername={currentUser} />} />
         <Route path="verified-transfer" element={
           <VerifiedTransferPage 
             onNavigate={handleNavigate} 

@@ -6,7 +6,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 const BACKGROUND_IMAGE_URL = "https://dev-aralinksassets.pantheonsite.io/wp-content/uploads/2026/04/869f1342f1d5d15337b2bbf470ad2382.jpg";
 
 interface LoginPageProps {
-  onLogin: (username: string, fullName: string, role: string) => void;
+  onLogin: (username: string, fullName: string, role: string, team?: string) => void;
   onGoToSignUp: () => void;
 }
 
@@ -44,7 +44,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToSignUp }) => {
         throw new Error('Incorrect username or password.');
       }
 
-      onLogin(data.username, data.full_name, data.role || 'Staff');
+      onLogin(data.username, data.full_name, data.role || 'Staff', data.team || 'Aralinks, Protrack');
     } catch (err: any) {
       setError(err.message || 'An error occurred during login.');
     } finally {

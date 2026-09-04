@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { X, ChevronDown, CheckCircle2, FileText, Check, Plus, Trash2, Paperclip, Upload, AlertCircle, Sparkles, Box, Loader2, Calendar, MapPin, Notebook, Zap, ShieldCheck, Tag, Search, Layers } from 'lucide-react';
-import { toTitleCase, getBundleColor } from '../lib/utils';
+import { toTitleCase, getBundleColor, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import { RequestData } from './ItemsRequest';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { useNotification } from './NotificationProvider';
@@ -28,6 +28,7 @@ interface SchoolItem {
   customer_code?: string;
   school_monitoring_id?: string;
   is_buffer: boolean;
+  team?: string;
 }
 
 interface NewRequestModalProps {
@@ -38,10 +39,27 @@ interface NewRequestModalProps {
   isDarkMode?: boolean;
   prefillItem?: string;
   prefillCode?: string;
+  userRole?: string | null;
+  userTeam?: string | null;
 }
 
-const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSubmit, initialData, isDarkMode = false, prefillItem, prefillCode }) => {
+const NewRequestModal: React.FC<NewRequestModalProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSubmit, 
+  initialData, 
+  isDarkMode = false, 
+  prefillItem, 
+  prefillCode,
+  userRole = 'Staff',
+  userTeam = null
+}) => {
   const { showSuccess, showError, showWarning } = useNotification();
+  const assignedTeams = useMemo(() => parseAssignedTeams(userTeam || localStorage.getItem('aralinks_team')), [userTeam]);
+  const isSingleTeam = userRole !== 'Super admin' && assignedTeams.length === 1;
+  const defaultTeam = isSingleTeam ? (assignedTeams[0] as 'Aralinks' | 'Protrack') : 'Aralinks';
+  const defaultReqType = defaultTeam === 'Protrack' ? 'SMS-PROTRACK' : 'ARALINKS';
+
   const [requestedBy, setRequestedBy] = useState('');
   const [requestedByError, setRequestedByError] = useState(false);
   const [userAccounts, setUserAccounts] = useState<string[]>([]);
@@ -52,7 +70,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
   const [poNumber, setPoNumber] = useState('');
   const [purpose, setPurpose] = useState('');
   const [controlNo, setControlNo] = useState('');
-  const [requestType, setRequestType] = useState<'ARALINKS' | 'SMS-PROTRACK'>('ARALINKS');
+  const [team, setTeam] = useState<'Aralinks' | 'Protrack'>(defaultTeam);
+  const [requestType, setRequestType] = useState<'ARALINKS' | 'SMS-PROTRACK'>(defaultReqType);
   const [dateOfRequest, setDateOfRequest] = useState('');
   const [program, setProgram] = useState('');
   const [remarks, setRemarks] = useState('');
@@ -184,7 +203,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
               : (row.status_dates || {}),
             items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
             school_monitoring_id: row.school_monitoring_id || '',
-            type_of_document: row.type_of_document || ''
+            type_of_document: row.type_of_document || '',
+            team: row.team || 'Aralinks'
           }));
 
           monitoringData = dbRecords;
@@ -211,7 +231,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
           name: record.school_name,
           customer_code: record.customer_code,
           school_monitoring_id: record.school_monitoring_id,
-          is_buffer: false
+          is_buffer: false,
+          team: record.team || 'Aralinks'
         });
       }
     });
@@ -499,7 +520,9 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         setPoNumber(initialData.poNumber || '');
         setPurpose(initialData.purpose || '');
         setControlNo(initialData.id || '');
-        setRequestType(initialData.requestType || 'ARALINKS');
+        const initTeam = (initialData.team === 'Protrack' || initialData.requestType === 'SMS-PROTRACK') ? 'Protrack' : 'Aralinks';
+        setTeam(initTeam);
+        setRequestType(initTeam === 'Protrack' ? 'SMS-PROTRACK' : 'ARALINKS');
         setDateOfRequest(initialData.date || getTodayIso());
         setProgram(initialData.program || '');
         setRemarks(initialData.remarks || '');
@@ -538,7 +561,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         setPoNumber('');
         setPurpose('');
         fetchNextControlNo();
-        setRequestType('ARALINKS');
+        setTeam(defaultTeam);
+        setRequestType(defaultReqType);
         setProgram('');
         setRemarks('');
         setSelectedSchools([]);
@@ -579,11 +603,16 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
       if (schoolType === 'existing') {
         return;
       }
-      // 1. Auto-populate Program
+      // 1. Auto-populate Program & Team
       const matchingRec = monitoringRecords.find(r => r.school_name === schoolName);
       if (matchingRec) {
         if (matchingRec.program) {
           setProgram(matchingRec.program);
+        }
+        if (matchingRec.team) {
+          const t = matchingRec.team.toLowerCase() === 'protrack' ? 'Protrack' : 'Aralinks';
+          setTeam(t);
+          setRequestType(t === 'Protrack' ? 'SMS-PROTRACK' : 'ARALINKS');
         }
         
         // 2. Auto-populate Item List based on monitoring record hardware list
@@ -957,7 +986,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
         control_no: controlNo.trim(),
         school_name: joinedSchools,
         buffer_school: isSelectedSchoolBuffer ? firstSelectedSchool : null,
-        request_type: requestType,
+        request_type: team === 'Aralinks' ? 'ARALINKS' : 'SMS-PROTRACK',
+        team: team,
         date: dateOfRequest,
         requested_by: requestedBy.trim(),
         ticket_no: ticketNumber.trim() || null,
@@ -1156,6 +1186,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
             </div>
           )}
 
+          {/* Pick Team / Request Type */}
           <div 
             className="flex flex-col items-center gap-3 p-4 sm:p-5 rounded-xl border transition-all"
             style={{ 
@@ -1164,55 +1195,59 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, onSu
             }}
           >
             <label 
-              className="text-[10px] font-medium uppercase tracking-wider"
-              style={{ color: `color-mix(in srgb, var(--brand-accent), transparent 40%)` }}
+              className="text-[10px] font-black uppercase tracking-wider"
+              style={{ color: `color-mix(in srgb, var(--brand-accent), transparent 30%)` }}
             >
-              {toTitleCase("Pick Request Type *")}
+              {toTitleCase("Team *")}
             </label>
-            <div className="flex flex-row items-center justify-center gap-6 sm:gap-10">
-              <button 
-                type="button"
-                onClick={() => setRequestType('ARALINKS')}
-                className="flex items-center gap-2 group cursor-pointer"
-              >
-                <div 
-                  className={`w-4 h-4 sm:w-5 sm:h-5 border-2 flex items-center justify-center transition-all ${requestType === 'ARALINKS' ? 'text-white' : 'bg-white dark:bg-slate-800 text-transparent'}`}
+            <div className="flex flex-row items-center justify-center gap-4 w-full max-w-sm">
+              {(!isSingleTeam || assignedTeams.includes('Aralinks')) && (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setTeam('Aralinks');
+                    setRequestType('ARALINKS');
+                  }}
+                  className={`flex-1 py-2.5 px-4 rounded-xl border-2 font-bold text-xs sm:text-sm uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    team === 'Aralinks'
+                      ? 'text-white shadow-md'
+                      : isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white' : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900'
+                  }`}
                   style={{ 
-                    borderColor: 'var(--brand-accent)',
-                    backgroundColor: requestType === 'ARALINKS' ? 'var(--brand-accent)' : undefined
+                    borderColor: team === 'Aralinks' ? 'var(--brand-accent)' : undefined,
+                    backgroundColor: team === 'Aralinks' ? 'var(--brand-accent)' : undefined
                   }}
                 >
-                  <span className="font-bold text-[10px] sm:text-xs leading-none">X</span>
-                </div>
-                <span 
-                  className="text-xs sm:text-sm font-medium uppercase tracking-wider transition-all"
-                  style={{ color: requestType === 'ARALINKS' ? 'var(--brand-accent)' : undefined }}
-                >
-                  ARALINKS
-                </span>
-              </button>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${team === 'Aralinks' ? 'border-white bg-white' : 'border-slate-400'}`}>
+                    {team === 'Aralinks' && <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--brand-accent)' }} />}
+                  </div>
+                  <span>Aralinks</span>
+                </button>
+              )}
 
-              <button 
-                type="button"
-                onClick={() => setRequestType('SMS-PROTRACK')}
-                className="flex items-center gap-2 group cursor-pointer"
-              >
-                <div 
-                  className={`w-4 h-4 sm:w-5 sm:h-5 border-2 flex items-center justify-center transition-all ${requestType === 'SMS-PROTRACK' ? 'text-white' : 'bg-white dark:bg-slate-800 text-transparent'}`}
+              {(!isSingleTeam || assignedTeams.includes('Protrack')) && (
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setTeam('Protrack');
+                    setRequestType('SMS-PROTRACK');
+                  }}
+                  className={`flex-1 py-2.5 px-4 rounded-xl border-2 font-bold text-xs sm:text-sm uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    team === 'Protrack'
+                      ? 'text-white shadow-md'
+                      : isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-white' : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900'
+                  }`}
                   style={{ 
-                    borderColor: 'var(--brand-accent)',
-                    backgroundColor: requestType === 'SMS-PROTRACK' ? 'var(--brand-accent)' : undefined
+                    borderColor: team === 'Protrack' ? 'var(--brand-accent)' : undefined,
+                    backgroundColor: team === 'Protrack' ? 'var(--brand-accent)' : undefined
                   }}
                 >
-                  <span className="font-bold text-[10px] sm:text-xs leading-none">X</span>
-                </div>
-                <span 
-                  className="text-xs sm:text-sm font-medium uppercase tracking-wider transition-all"
-                  style={{ color: requestType === 'SMS-PROTRACK' ? 'var(--brand-accent)' : undefined }}
-                >
-                  SMS-PROTRACK
-                </span>
-              </button>
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${team === 'Protrack' ? 'border-white bg-white' : 'border-slate-400'}`}>
+                    {team === 'Protrack' && <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'var(--brand-accent)' }} />}
+                  </div>
+                  <span>Protrack</span>
+                </button>
+              )}
             </div>
           </div>
 

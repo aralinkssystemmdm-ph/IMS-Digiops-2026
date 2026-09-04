@@ -33,7 +33,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { toTitleCase } from '../lib/utils';
+import { toTitleCase, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import { useNotification } from './NotificationProvider';
 import PageHeader from './PageHeader';
 import AddStockModal from './AddStockModal';
@@ -73,6 +73,7 @@ interface TransferHistory {
   transferred_by: string;
   items: any[];
   program: string;
+  team?: string;
 }
 
 interface InventoryProps {
@@ -81,6 +82,7 @@ interface InventoryProps {
   autoOpenTransfer?: boolean;
   isDarkMode?: boolean;
   userRole?: string | null;
+  userTeam?: string | null;
 }
 
 const Inventory: React.FC<InventoryProps> = ({ 
@@ -88,7 +90,8 @@ const Inventory: React.FC<InventoryProps> = ({
   initialView = 'list', 
   autoOpenTransfer = false, 
   isDarkMode = false,
-  userRole = 'Staff'
+  userRole = 'Staff',
+  userTeam = null
 }) => {
   const { showSuccess, showError } = useNotification();
   const [isSyncingStocks, setIsSyncingStocks] = useState(false);
@@ -98,7 +101,25 @@ const Inventory: React.FC<InventoryProps> = ({
   const [statusFilter, setStatusFilter] = useState('All Statuses');
   const [locationFilter, setLocationFilter] = useState('All Locations');
   const [conditionFilter, setConditionFilter] = useState('All Conditions');
-  const [teamFilter, setTeamFilter] = useState('All Teams');
+
+  const assignedTeams = useMemo(() => parseAssignedTeams(userTeam || localStorage.getItem('aralinks_team')), [userTeam]);
+  const isSingleTeam = userRole !== 'Super admin' && assignedTeams.length === 1;
+  const initialTeamFilter = isSingleTeam ? assignedTeams[0] : 'All Teams';
+  const [teamFilter, setTeamFilter] = useState(initialTeamFilter);
+
+  useEffect(() => {
+    if (isSingleTeam) {
+      setTeamFilter(assignedTeams[0]);
+    }
+  }, [isSingleTeam, assignedTeams]);
+
+  const availableTeamFilters = useMemo(() => {
+    if (isSingleTeam) {
+      return [assignedTeams[0]];
+    }
+    return ['All Teams', 'Aralinks', 'Protrack'];
+  }, [isSingleTeam, assignedTeams]);
+
   const [availableLocations, setAvailableLocations] = useState<string[]>([]);
   const [allLocationStocks, setAllLocationStocks] = useState<any[]>([]);
   const [isLocFilterOpen, setIsLocFilterOpen] = useState(false);
@@ -564,17 +585,23 @@ const Inventory: React.FC<InventoryProps> = ({
 
   const filteredTransfers = useMemo(() => {
     return transferHistory.filter(req => {
+      // Strictly enforce user's assigned team accessibility
+      if (!isTeamAccessible(req.team, userTeam, userRole)) {
+        return false;
+      }
+
       const matchesSearch = !searchQuery || 
         req.req_no.toLowerCase().includes(searchQuery.toLowerCase()) || 
         (req.program && req.program.toLowerCase().includes(searchQuery.toLowerCase()));
 
       const matchesTeam = 
         teamFilter === 'All Teams' ||
-        (req.team && req.team.toLowerCase() === teamFilter.toLowerCase());
+        (req.team && req.team.toLowerCase() === teamFilter.toLowerCase()) ||
+        (!req.team && teamFilter.toLowerCase() === 'aralinks');
 
       return matchesSearch && matchesTeam;
     });
-  }, [transferHistory, searchQuery, teamFilter]);
+  }, [transferHistory, searchQuery, teamFilter, userTeam, userRole]);
 
   const handleViewLocations = (item: InventoryItem) => {
     setSelectedItem(item);
@@ -655,13 +682,19 @@ const Inventory: React.FC<InventoryProps> = ({
           statusFilter === 'All Statuses' || 
           item.status === statusFilter;
 
+        // Strictly enforce user's assigned team accessibility
+        if (!isTeamAccessible(item.team, userTeam, userRole)) {
+          return false;
+        }
+
         const matchesTeam = 
           teamFilter === 'All Teams' ||
-          (item.team && item.team.toLowerCase() === teamFilter.toLowerCase());
+          (item.team && item.team.toLowerCase() === teamFilter.toLowerCase()) ||
+          (!item.team && teamFilter.toLowerCase() === 'aralinks');
 
         return matchesSearch && matchesStatus && matchesTeam;
       });
-  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks, teamFilter]);
+  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks, teamFilter, userTeam, userRole]);
 
   const handleSort = (field: 'item_code' | 'item_name') => {
     if (sortField === field) {
@@ -1223,7 +1256,7 @@ const Inventory: React.FC<InventoryProps> = ({
 
               {/* Team Filter */}
               <div className={`flex items-center p-1 rounded-lg border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
-                {['All Teams', 'Aralinks', 'Protrack'].map((t) => (
+                {availableTeamFilters.map((t) => (
                   <button
                     key={t}
                     onClick={() => setTeamFilter(t)}
@@ -1239,13 +1272,13 @@ const Inventory: React.FC<InventoryProps> = ({
               </div>
 
               {/* Reset Filters */}
-              {(statusFilter !== 'All Statuses' || conditionFilter !== 'All Conditions' || teamFilter !== 'All Teams' || searchQuery !== '') && (
+              {(statusFilter !== 'All Statuses' || conditionFilter !== 'All Conditions' || (teamFilter !== 'All Teams' && !isSingleTeam) || searchQuery !== '') && (
                 <button
                   onClick={() => {
                     setStatusFilter('All Statuses');
                     setLocationFilter('All Locations');
                     setConditionFilter('All Conditions');
-                    setTeamFilter('All Teams');
+                    setTeamFilter(isSingleTeam ? assignedTeams[0] : 'All Teams');
                     setSearchQuery('');
                   }}
                   className="px-5 py-3 rounded-lg border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 text-xs font-bold tracking-wider hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center gap-2 flex-1 lg:flex-none justify-center"
@@ -1260,7 +1293,7 @@ const Inventory: React.FC<InventoryProps> = ({
             <>
               {/* Team Filter for Transfers */}
               <div className={`flex items-center p-1 rounded-lg border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
-                {['All Teams', 'Aralinks', 'Protrack'].map((t) => (
+                {availableTeamFilters.map((t) => (
                   <button
                     key={t}
                     onClick={() => setTeamFilter(t)}
@@ -1274,11 +1307,11 @@ const Inventory: React.FC<InventoryProps> = ({
                   </button>
                 ))}
               </div>
-              {(searchQuery || teamFilter !== 'All Teams') && (
+              {(searchQuery || (teamFilter !== 'All Teams' && !isSingleTeam)) && (
                 <button
                   onClick={() => {
                     setSearchQuery('');
-                    setTeamFilter('All Teams');
+                    setTeamFilter(isSingleTeam ? assignedTeams[0] : 'All Teams');
                   }}
                   className="px-5 py-3 rounded-lg border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 text-xs font-bold tracking-wider hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center gap-2 flex-1 lg:flex-none justify-center"
                 >

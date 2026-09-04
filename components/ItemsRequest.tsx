@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Archive, Edit3, Loader2, FileText, Eye, ArrowUp, ArrowDown, CheckSquare, Square, Filter, ChevronDown, ChevronUp, Clock, MapPin, Tag, CheckCircle2, CalendarDays, X, Plus, Check, Calendar, Paperclip, Trash2, Box, History, Printer, ExternalLink, ArrowRightLeft, Notebook, TrendingUp, Download, Ban, RotateCcw, AlertTriangle } from 'lucide-react';
-import { toTitleCase, cleanPONumber, getBundleColor, getProgramBadgeClass } from '../lib/utils';
+import { toTitleCase, cleanPONumber, getBundleColor, getProgramBadgeClass, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import NewRequestModal from './NewRequestModal';
 import RequestPreviewModal from './RequestPreviewModal';
 import ItemVerificationModal from './ItemVerificationModal';
@@ -23,6 +23,7 @@ interface ItemsRequestProps {
   prefillItem?: string;
   prefillCode?: string;
   userRole?: string | null;
+  userTeam?: string | null;
 }
 
 export interface RequestData {
@@ -31,6 +32,7 @@ export interface RequestData {
   schoolName: string;
   bufferSchool?: string;
   requestType: 'ARALINKS' | 'SMS-PROTRACK';
+  team?: 'Aralinks' | 'Protrack' | string;
   date: string;
   requestedBy: string;
   archivedBy?: string; 
@@ -502,6 +504,16 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                 {request.program || 'OTHER'}
               </span>
             </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Team:</span>
+              <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${
+                (request.team || (request.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase() === 'protrack'
+                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300'
+                  : 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300'
+              }`}>
+                {request.team || (request.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')}
+              </span>
+            </div>
             {request.requestType && (
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Type:</span>
@@ -955,7 +967,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
   isDarkMode = false,
   prefillItem,
   prefillCode,
-  userRole = 'Staff'
+  userRole = 'Staff',
+  userTeam = null
 }) => {
   const { showSuccess, showError, showDelete } = useNotification();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -987,6 +1000,25 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilterType>('All');
+
+  const assignedTeams = useMemo(() => parseAssignedTeams(userTeam || localStorage.getItem('aralinks_team')), [userTeam]);
+  const isSingleTeam = userRole !== 'Super admin' && assignedTeams.length === 1;
+  const initialTeamFilter = (isSingleTeam ? assignedTeams[0] : 'ALL') as 'ALL' | 'Aralinks' | 'Protrack';
+  const [teamFilter, setTeamFilter] = useState<'ALL' | 'Aralinks' | 'Protrack'>(initialTeamFilter);
+
+  useEffect(() => {
+    if (isSingleTeam) {
+      setTeamFilter(assignedTeams[0] as 'Aralinks' | 'Protrack');
+    }
+  }, [isSingleTeam, assignedTeams]);
+
+  const availableTeamFilters = useMemo(() => {
+    if (isSingleTeam) {
+      return [assignedTeams[0] as 'Aralinks' | 'Protrack'];
+    }
+    return ['ALL', 'Aralinks', 'Protrack'] as ('ALL' | 'Aralinks' | 'Protrack')[];
+  }, [isSingleTeam, assignedTeams]);
+
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState<number | 'all'>(20);
   const [programFilter, setProgramFilter] = useState<ProgramFilterType>('All');
@@ -994,7 +1026,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
   const [customDateRange, setCustomDateRange] = useState<{ start: string; end: string }>({ start: '', end: '' });
   const [suppliers, setSuppliers] = useState<{ id: string; supplier_name: string }[]>([]);
   
-  const [sortField, setSortField] = useState<'control_no' | 'school_name' | 'program' | 'date' | 'status'>('date');
+  const [sortField, setSortField] = useState<'control_no' | 'school_name' | 'program' | 'date' | 'status' | 'team'>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   const handleSort = (field: typeof sortField) => {
@@ -1151,6 +1183,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
             schoolName: req.school_name,
             bufferSchool: req.buffer_school,
             requestType: (req.request_type || 'ARALINKS') as 'ARALINKS' | 'SMS-PROTRACK',
+            team: req.team || (req.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks'),
             date: req.date, 
             requestedBy: req.requested_by,
             status,
@@ -1241,20 +1274,31 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     }
   }, [highlightedId, loading, requests]);
 
+  const teamFilteredRequests = useMemo(() => {
+    return requests.filter(r => {
+      const rTeam = r.team || (r.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks');
+      if (!isTeamAccessible(rTeam, userTeam, userRole)) {
+        return false;
+      }
+      if (teamFilter === 'ALL' || teamFilter === 'All') return true;
+      return rTeam.toLowerCase() === teamFilter.toLowerCase();
+    });
+  }, [requests, teamFilter, userTeam, userRole]);
+
   const counts = useMemo(() => {
     const list = ['NGS', 'HUB', 'TNL', 'ACE', 'NGS+ACE', 'HUB+ACE', 'PELS NGS', 'PELS NGS+ACE', 'ACE+PELS', 'ABDL', 'ACE+ABDL', 'HUB+NGS', 'ABDL (PELS)'];
     const res: Record<string, number> = {
-      All: requests.length,
-      Pending: requests.filter(r => r.status === 'Pending').length,
-      Partially: requests.filter(r => r.status === 'Partially Delivered').length,
-      Completed: requests.filter(r => r.status === 'Delivered').length,
-      Cancelled: requests.filter(r => r.status === 'Cancelled').length,
+      All: teamFilteredRequests.length,
+      Pending: teamFilteredRequests.filter(r => r.status === 'Pending').length,
+      Partially: teamFilteredRequests.filter(r => r.status === 'Partially Delivered').length,
+      Completed: teamFilteredRequests.filter(r => r.status === 'Delivered').length,
+      Cancelled: teamFilteredRequests.filter(r => r.status === 'Cancelled').length,
     };
     list.forEach(p => {
-      res[p] = requests.filter(r => (r.program || 'GENERAL').toUpperCase() === p.toUpperCase()).length;
+      res[p] = teamFilteredRequests.filter(r => (r.program || 'GENERAL').toUpperCase() === p.toUpperCase()).length;
     });
     return res;
-  }, [requests]);
+  }, [teamFilteredRequests]);
 
   const filteredRequests = useMemo(() => {
     let result = requests.filter(req => {
@@ -1265,6 +1309,15 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         req.schoolName.toLowerCase().includes(searchQuery.toLowerCase());
       
       if (!matchesSearch) return false;
+
+      // Strictly enforce user's assigned team accessibility
+      const rTeam = req.team || (req.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks');
+      if (!isTeamAccessible(rTeam, userTeam, userRole)) return false;
+
+      // Team Filter
+      if (teamFilter !== 'ALL' && teamFilter !== 'All') {
+        if (rTeam.toLowerCase() !== teamFilter.toLowerCase()) return false;
+      }
 
       // Status Filter
       if (statusFilter !== 'All') {
@@ -1343,6 +1396,12 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         case 'program':
           comparison = (a.program || '').localeCompare(b.program || '');
           break;
+        case 'team': {
+          const teamA = (a.team || (a.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase();
+          const teamB = (b.team || (b.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase();
+          comparison = teamA.localeCompare(teamB);
+          break;
+        }
         case 'status':
           const statusPriority: Record<string, number> = {
             'Pending': 1,
@@ -1363,11 +1422,11 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     });
 
     return result;
-  }, [requests, searchQuery, statusFilter, programFilter, dateFilter, customDateRange, sortDirection, sortField]);
+  }, [requests, searchQuery, statusFilter, teamFilter, programFilter, dateFilter, customDateRange, sortDirection, sortField]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter, programFilter, dateFilter, customDateRange]);
+  }, [searchQuery, statusFilter, teamFilter, programFilter, dateFilter, customDateRange]);
 
   const paginatedRequests = useMemo(() => {
     const effectiveItemsPerPage = itemsPerPage === 'all' ? filteredRequests.length : itemsPerPage;
@@ -1500,6 +1559,16 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
              </div>
              <span className="text-[8px] font-bold text-slate-400 dark:text-slate-500 tracking-widest uppercase whitespace-nowrap">{req.requestType}</span>
           </div>
+        </div>
+
+        <div className="flex-[0.9] min-w-0 px-2 whitespace-nowrap">
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
+            (req.team || (req.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase() === 'protrack'
+              ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/40'
+              : 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40'
+          }`}>
+            {req.team || (req.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')}
+          </span>
         </div>
 
         <div className="flex-[1.8] min-w-0 px-2 flex flex-col">
@@ -1882,6 +1951,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     const headers = [
       'Control No',
       'Ticket No',
+      'Team',
       'School Name',
       'School Monitoring ID',
       'Buffer School',
@@ -1936,6 +2006,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       csvRows.push([
         req.id || '',
         req.ticketNo || '',
+        req.team || (req.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks'),
         req.schoolName || '',
         req.school_monitoring_id || '',
         req.bufferSchool || '',
@@ -2568,6 +2639,29 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       
       <div className="mx-2 sm:mx-6 lg:mx-12 flex flex-col lg:flex-row lg:items-center justify-between gap-4 sm:gap-6 mb-8 mt-4">
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          {/* Team filter button group */}
+          <div className={`flex items-center p-1 rounded-xl border ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'} shadow-sm`}>
+            {availableTeamFilters.map((t) => (
+              <button
+                key={t}
+                onClick={() => setTeamFilter(t)}
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                  teamFilter === t 
+                    ? (isDarkMode ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-100 text-slate-900 shadow-sm') 
+                    : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                }`}
+                style={teamFilter === t ? {
+                  backgroundColor: 'var(--brand-accent)',
+                  color: '#ffffff'
+                } : {}}
+              >
+                {t === 'ALL' ? 'All Teams' : t}
+              </button>
+            ))}
+          </div>
+
+          <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 mx-1 hidden lg:block" />
+
           {(['All', 'Pending', 'Partially', 'Completed', 'Cancelled'] as StatusFilterType[]).map((filter) => (
             <button
               key={filter}
@@ -2837,6 +2931,15 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                 </div>
               </div>
               <div 
+                className="flex-[0.9] min-w-0 px-2 font-semibold text-[11px] tracking-wider text-gray-700 dark:text-slate-400 whitespace-nowrap uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors flex items-center gap-1 group"
+                onClick={() => handleSort('team')}
+              >
+                {toTitleCase("Team")}
+                <div className={`transition-all duration-300 ${sortField === 'team' ? 'opacity-100' : 'opacity-0 group-hover:opacity-50'}`}>
+                  {sortField === 'team' && sortDirection === 'desc' ? <ArrowDown size={10} style={{ color: 'var(--brand-accent)' }} /> : <ArrowUp size={10} style={{ color: 'var(--brand-accent)' }} />}
+                </div>
+              </div>
+              <div 
                 className="flex-[1.8] min-w-0 px-2 font-semibold text-[11px] tracking-wider text-gray-700 dark:text-slate-400 whitespace-nowrap uppercase cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors flex items-center gap-1 group"
                 onClick={() => handleSort('school_name')}
               >
@@ -2992,7 +3095,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         onClose={() => { 
           setIsModalOpen(false); 
           setEditingRequest(null); 
-          onNavigate('requests', { openNewRequest: false });
+          onNavigate?.('requests', { openNewRequest: false });
         }} 
         onSubmit={() => {
           fetchRequests(false);
@@ -3001,6 +3104,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
         isDarkMode={isDarkMode}
         prefillItem={prefillItem}
         prefillCode={prefillCode}
+        userRole={userRole}
+        userTeam={userTeam}
       />
 
       <RequestPreviewModal 

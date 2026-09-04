@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, UserPlus, Search, Filter, MoreHorizontal, Trash2, Edit, Check, X, Loader2, Shield, RefreshCw, ChevronDown, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { User, UserPlus, Search, Filter, MoreHorizontal, Trash2, Edit, Check, X, Loader2, Shield, RefreshCw, ChevronDown, Eye, EyeOff, AlertTriangle, Users as UsersIcon } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useNotification } from './NotificationProvider';
 import { toTitleCase } from '../lib/utils';
@@ -9,8 +9,13 @@ import PageHeader from './PageHeader';
 interface UserAccount {
   id: string;
   username: string;
+  password?: string;
   full_name: string;
+  first_name?: string;
+  middle_initial?: string;
+  last_name?: string;
   role: string;
+  team?: string;
   office_based?: string;
   created_at?: string;
 }
@@ -20,6 +25,24 @@ interface UsersProps {
   userRole?: string | null;
   currentUsername?: string | null;
 }
+
+const TEAMS = ['Aralinks', 'Protrack'] as const;
+
+const parseTeams = (teamValue?: string | null): string[] => {
+  if (!teamValue || typeof teamValue !== 'string' || !teamValue.trim()) return ['Aralinks'];
+  const rawParts = teamValue.split(/[,;/|]+/).map(t => t.trim()).filter(Boolean);
+  const result: string[] = [];
+
+  for (const part of rawParts) {
+    const matched = TEAMS.find(t => t.toLowerCase() === part.toLowerCase());
+    const canonical = matched || (part.charAt(0).toUpperCase() + part.slice(1).toLowerCase());
+    if (!result.some(existing => existing.toLowerCase() === canonical.toLowerCase())) {
+      result.push(canonical);
+    }
+  }
+
+  return result.length > 0 ? result : ['Aralinks'];
+};
 
 const getInitials = (name: string) => {
   if (!name) return '??';
@@ -33,6 +56,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
   const [users, setUsers] = useState<UserAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [teamFilter, setTeamFilter] = useState<'ALL' | 'Aralinks' | 'Protrack'>('ALL');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -41,6 +65,20 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
   const [showPassword, setShowPassword] = useState(false);
   const [editingUser, setEditingUser] = useState<any>(null);
   const [userToDelete, setUserToDelete] = useState<any>(null);
+
+  // Sorting state
+  type SortField = 'name' | 'team' | 'office' | 'username' | 'role';
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
 
   // Custom Dropdown states
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
@@ -57,7 +95,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
 
   const isSuperAdmin = userRole === 'Super admin';
 
-  // New User Form State
+  // Form State
   const [newUser, setNewUser] = useState({
     firstName: '',
     middleInitial: '',
@@ -65,8 +103,24 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
     username: '',
     password: '',
     role: 'Staff',
-    officeBased: 'PPH Main'
+    officeBased: 'PPH Main',
+    teams: ['Aralinks'] as string[]
   });
+
+  const toggleTeam = (teamName: string) => {
+    setNewUser(prev => {
+      const currentTeams = parseTeams(prev.teams.join(', '));
+      const exists = currentTeams.some(t => t.toLowerCase() === teamName.toLowerCase());
+      let next: string[];
+      if (exists) {
+        next = currentTeams.filter(t => t.toLowerCase() !== teamName.toLowerCase());
+        if (next.length === 0) next = [teamName];
+      } else {
+        next = [...currentTeams, teamName];
+      }
+      return { ...prev, teams: parseTeams(next.join(', ')) };
+    });
+  };
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -79,10 +133,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
     if (newUser.firstName || newUser.lastName) {
       const generatedUsername = `${newUser.firstName.toLowerCase().replace(/\s+/g, '')}.${newUser.lastName.toLowerCase().replace(/\s+/g, '')}`;
       
-      // Update state
       setNewUser(prev => {
         const updates: any = { username: generatedUsername };
-        
         return { ...prev, ...updates };
       });
     }
@@ -107,7 +159,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
         username: '',
         password: generatePassword(),
         role: 'Staff',
-        officeBased: 'PPH Main'
+        officeBased: 'PPH Main',
+        teams: ['Aralinks']
       });
     }
   }, [isAddModalOpen]);
@@ -164,6 +217,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
         throw new Error('Username already taken.');
       }
 
+      const teamString = parseTeams(newUser.teams.join(', ')).join(', ');
+
       const { error } = await supabase
         .from('user_accounts')
         .insert([{
@@ -174,7 +229,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
           middle_initial: (newUser.middleInitial || '').trim().substring(0, 1),
           last_name: newUser.lastName.trim(),
           role: newUser.role,
-          office_based: newUser.officeBased
+          office_based: newUser.officeBased,
+          team: teamString
         }]);
 
       if (error) throw error;
@@ -188,7 +244,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
         username: '',
         password: '',
         role: 'Staff',
-        officeBased: 'PPH Main'
+        officeBased: 'PPH Main',
+        teams: ['Aralinks']
       });
       fetchUsers();
     } catch (err: any) {
@@ -229,9 +286,9 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
 
   const handleEditClick = (user: any) => {
     // Parse the name to fill the form
-    const names = user.full_name.split(' ');
-    let firstName = names[0];
-    let lastName = names[names.length - 1];
+    const names = (user.full_name || '').split(' ');
+    let firstName = names[0] || '';
+    let lastName = names[names.length - 1] || '';
     let middleInitial = '';
 
     if (names.length > 2) {
@@ -244,9 +301,10 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
       middleInitial: user.middle_initial || middleInitial,
       lastName: user.last_name || lastName,
       username: user.username,
-      password: user.password,
+      password: user.password || '',
       role: user.role,
-      officeBased: user.office_based || 'PPH Main'
+      officeBased: user.office_based || 'PPH Main',
+      teams: parseTeams(user.team)
     });
     setIsEditModalOpen(true);
   };
@@ -261,6 +319,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
     setIsSubmitting(true);
     try {
       const fullName = `${newUser.firstName.trim()} ${(newUser.middleInitial || '').trim() ? (newUser.middleInitial || '').trim().toUpperCase() + '. ' : ''}${newUser.lastName.trim()}`;
+      const teamString = parseTeams(newUser.teams.join(', ')).join(', ');
       
       const { error } = await supabase
         .from('user_accounts')
@@ -272,7 +331,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
           middle_initial: (newUser.middleInitial || '').trim().substring(0, 1).toUpperCase(),
           last_name: newUser.lastName.trim(),
           role: newUser.role,
-          office_based: newUser.officeBased
+          office_based: newUser.officeBased,
+          team: teamString
         })
         .match({ id: editingUser.id });
 
@@ -288,7 +348,8 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
         username: '',
         password: '',
         role: 'Staff',
-        officeBased: 'PPH Main'
+        officeBased: 'PPH Main',
+        teams: ['Aralinks']
       });
       fetchUsers();
     } catch (err: any) {
@@ -299,11 +360,53 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
   };
 
   const filteredUsers = React.useMemo(() => {
-    let list = users.filter(user => 
-      user.full_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.role.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    let list = users.filter(user => {
+      // Team filter
+      if (teamFilter !== 'ALL') {
+        const userTeams = parseTeams(user.team);
+        const matchesTeam = userTeams.some(t => t.toLowerCase() === teamFilter.toLowerCase());
+        if (!matchesTeam) return false;
+      }
+
+      // Search query
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const matchesSearch = 
+          (user.full_name || '').toLowerCase().includes(query) ||
+          (user.username || '').toLowerCase().includes(query) ||
+          (user.role || '').toLowerCase().includes(query) ||
+          (user.office_based || '').toLowerCase().includes(query) ||
+          (user.team || '').toLowerCase().includes(query);
+        if (!matchesSearch) return false;
+      }
+
+      return true;
+    });
+
+    list.sort((a, b) => {
+      let comparison = 0;
+      switch (sortField) {
+        case 'name':
+          comparison = (a.full_name || '').localeCompare(b.full_name || '');
+          break;
+        case 'team': {
+          const aTeams = parseTeams(a.team).join(', ');
+          const bTeams = parseTeams(b.team).join(', ');
+          comparison = aTeams.localeCompare(bTeams);
+          break;
+        }
+        case 'office':
+          comparison = (a.office_based || '').localeCompare(b.office_based || '');
+          break;
+        case 'username':
+          comparison = (a.username || '').localeCompare(b.username || '');
+          break;
+        case 'role':
+          comparison = (a.role || '').localeCompare(b.role || '');
+          break;
+      }
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
 
     // Pin current user to top if found in filtered results
     if (loggedInUsername) {
@@ -315,7 +418,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
     }
 
     return list;
-  }, [users, searchQuery, loggedInUsername]);
+  }, [users, teamFilter, searchQuery, sortField, sortDirection, loggedInUsername]);
 
   return (
     <div className="w-full h-full flex flex-col animate-in fade-in duration-500">
@@ -327,32 +430,70 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
         />
       </div>
 
-      {/* Search and Add Action Bar */}
-      <div className="px-6 lg:px-12 pt-0 pb-6 flex flex-col sm:flex-row items-center justify-between gap-4 shrink-0">
-        <div className="relative w-full sm:w-96 group">
-          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-[var(--brand-accent)] transition-colors">
-            <Search size={18} />
+      {/* Search, Team Filter and Add Action Bar */}
+      <div className="px-6 lg:px-12 pt-0 pb-6 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 shrink-0">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 max-w-3xl">
+          {/* Search Bar */}
+          <div className="relative flex-1 group min-w-[240px]">
+            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-[var(--brand-accent)] transition-colors">
+              <Search size={18} />
+            </div>
+            <input 
+              type="text" 
+              placeholder="Search users..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className={`w-full h-12 pl-12 pr-4 rounded-2xl border transition-all outline-none text-sm font-medium ${
+                isDarkMode 
+                  ? 'bg-slate-900 border-slate-800 text-white focus:bg-slate-800' 
+                  : 'bg-white border-slate-100 text-slate-700 focus:bg-[#FAF8F8]'
+              }`}
+              style={{ 
+                borderColor: searchQuery ? 'var(--brand-accent)' : undefined,
+                '--tw-ring-color': 'var(--brand-accent)'
+              } as any}
+            />
           </div>
-          <input 
-            type="text" 
-            placeholder="Search users..." 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className={`w-full h-12 pl-12 pr-4 rounded-2xl border transition-all outline-none text-sm font-medium ${
-              isDarkMode 
-                ? 'bg-slate-900 border-slate-800 text-white focus:bg-slate-800' 
-                : 'bg-white border-slate-100 text-slate-700 focus:bg-[#FAF8F8]'
-            }`}
-            style={{ 
-              borderColor: searchQuery ? 'var(--brand-accent)' : undefined,
-              '--tw-ring-color': 'var(--brand-accent)'
-            } as any}
-          />
+
+          {/* Team Filter Button Group */}
+          <div className={`flex items-center p-1 rounded-2xl border ${
+            isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
+          } shadow-sm shrink-0 overflow-x-auto custom-scrollbar`}>
+            {(['ALL', 'Aralinks', 'Protrack'] as const).map((t) => {
+              const isSelected = teamFilter === t;
+              const count = t === 'ALL' 
+                ? users.length 
+                : users.filter(u => parseTeams(u.team).some(item => item.toLowerCase() === t.toLowerCase())).length;
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setTeamFilter(t)}
+                  className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 whitespace-nowrap ${
+                    isSelected 
+                      ? 'text-white shadow-md' 
+                      : isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                  style={isSelected ? {
+                    backgroundColor: 'var(--brand-accent)',
+                    color: '#ffffff'
+                  } : {}}
+                >
+                  <span>{t === 'ALL' ? 'All Teams' : t}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                    isSelected ? 'bg-white/20 text-white' : isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <button 
           onClick={() => setIsAddModalOpen(true)}
-          className="w-full sm:w-auto h-12 px-8 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2"
+          className="h-12 px-8 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0 self-end md:self-auto"
           style={{ 
             backgroundColor: 'var(--brand-accent)',
             boxShadow: '0 10px 15px -3px color-mix(in srgb, var(--brand-accent), transparent 80%)'
@@ -371,29 +512,65 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className={`${isDarkMode ? 'bg-slate-800/50' : 'bg-slate-50'} border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-100'}`}>
-                <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Name</th>
-                <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Office Based</th>
-                <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Username</th>
-                <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">Role</th>
+                <th onClick={() => handleSort('name')} className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap cursor-pointer hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  <div className="flex items-center gap-1.5">
+                    <span>Name</span>
+                    {sortField === 'name' && (
+                      <span style={{ color: 'var(--brand-accent)' }}>{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('team')} className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap cursor-pointer hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  <div className="flex items-center gap-1.5">
+                    <span>Team</span>
+                    {sortField === 'team' && (
+                      <span style={{ color: 'var(--brand-accent)' }}>{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('office')} className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap cursor-pointer hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  <div className="flex items-center gap-1.5">
+                    <span>Office Based</span>
+                    {sortField === 'office' && (
+                      <span style={{ color: 'var(--brand-accent)' }}>{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('username')} className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap cursor-pointer hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  <div className="flex items-center gap-1.5">
+                    <span>Username</span>
+                    {sortField === 'username' && (
+                      <span style={{ color: 'var(--brand-accent)' }}>{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('role')} className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap cursor-pointer hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                  <div className="flex items-center gap-1.5">
+                    <span>Role</span>
+                    {sortField === 'role' && (
+                      <span style={{ color: 'var(--brand-accent)' }}>{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                    )}
+                  </div>
+                </th>
                 <th className="px-6 py-5 text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
                 <tr key="loading-spinner">
-                  <td colSpan={5} className="px-6 py-20 text-center">
+                  <td colSpan={6} className="px-6 py-20 text-center">
                     <Loader2 className="animate-spin mx-auto mb-3" style={{ color: 'var(--brand-accent)' }} size={32} />
                     <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Loading users data...</p>
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr key="no-users-found">
-                  <td colSpan={5} className="px-6 py-20 text-center">
+                  <td colSpan={6} className="px-6 py-20 text-center">
                     <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-400">
                       <Search size={28} />
                     </div>
                     <p className="text-sm font-bold text-slate-800 dark:text-white mb-1">No users found</p>
-                    <p className="text-xs text-slate-500 font-medium tracking-wide">Try adjusting your search criteria</p>
+                    <p className="text-xs text-slate-500 font-medium tracking-wide">Try adjusting your search or team filter criteria</p>
                   </td>
                 </tr>
               ) : (
@@ -405,7 +582,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm uppercase shadow-sm"
+                          <div className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm uppercase shadow-sm shrink-0"
                             style={isSelf ? { backgroundColor: 'var(--brand-accent)', color: 'white' } : { backgroundColor: 'color-mix(in srgb, var(--brand-accent), transparent 90%)', color: 'var(--brand-accent)' }}
                           >
                             {getInitials(user.full_name)}
@@ -414,7 +591,7 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
                             <div className="flex items-center gap-2">
                               <p className="text-sm font-black text-slate-800 dark:text-white tracking-tight">{user.full_name || 'Unnamed User'}</p>
                               {isSelf && (
-                                <span className="ml-2 text-[10px] font-bold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full uppercase tracking-wider"
+                                <span className="text-[10px] font-bold bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full uppercase tracking-wider"
                                   style={{ backgroundColor: 'color-mix(in srgb, var(--brand-accent), transparent 90%)', color: 'var(--brand-accent)' }}
                                 >
                                   You
@@ -425,17 +602,42 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
                         </div>
                       </td>
                       <td className="px-6 py-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {parseTeams(user.team).map((t) => {
+                            const isAralinks = t.toLowerCase() === 'aralinks';
+                            return (
+                              <span
+                                key={t}
+                                className={`inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                                  isAralinks
+                                    ? isDarkMode 
+                                      ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' 
+                                      : 'bg-blue-50 text-blue-600 border border-blue-200'
+                                    : isDarkMode 
+                                      ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30' 
+                                      : 'bg-purple-50 text-purple-600 border border-purple-200'
+                                }`}
+                              >
+                                {t}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
                         <p className="text-sm font-bold text-slate-600 dark:text-slate-400 tracking-tight">{user.office_based || 'PPH Main'}</p>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 text-sm font-mono" style={{ color: 'var(--brand-accent)' }}>
+                        <div className="flex items-center gap-2 text-sm font-mono font-bold" style={{ color: 'var(--brand-accent)' }}>
                           <User size={14} />
                           <span>{user.username}</span>
                         </div>
                       </td>
                       <td className="px-6 py-4">
                         <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border ${
-                          user.role.toLowerCase() === 'admin' 
+                          user.role.toLowerCase() === 'super admin'
+                            ? 'bg-amber-50 text-amber-600 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'
+                            : user.role.toLowerCase() === 'admin' 
                             ? 'bg-purple-50 text-purple-600 border-purple-100 dark:bg-purple-500/10 dark:text-purple-400 dark:border-purple-500/20' 
                             : 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20'
                         }`}>
@@ -677,6 +879,58 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
                     >
                       {showPassword ? <EyeOff size={18} strokeWidth={2.5} /> : <Eye size={18} strokeWidth={2.5} />}
                     </button>
+                  </div>
+                </div>
+
+                {/* Team Multi-Selection */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                      Assigned Team(s)
+                    </label>
+                    <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                      Multiple selection allowed
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {TEAMS.map((teamName) => {
+                      const isSelected = newUser.teams.includes(teamName);
+                      const isAralinks = teamName === 'Aralinks';
+                      return (
+                        <button
+                          key={teamName}
+                          type="button"
+                          onClick={() => toggleTeam(teamName)}
+                          className={`h-11 px-3.5 rounded-xl font-bold text-xs flex items-center justify-between transition-all border ${
+                            isSelected
+                              ? isAralinks
+                                ? isDarkMode 
+                                  ? 'bg-blue-500/20 border-blue-500 text-blue-300 shadow-sm' 
+                                  : 'bg-blue-50 border-blue-300 text-blue-700 shadow-sm'
+                                : isDarkMode 
+                                  ? 'bg-purple-500/20 border-purple-500 text-purple-300 shadow-sm' 
+                                  : 'bg-purple-50 border-purple-300 text-purple-700 shadow-sm'
+                              : isDarkMode
+                                ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700/60'
+                                : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${isAralinks ? 'bg-blue-500' : 'bg-purple-500'}`} />
+                            {teamName}
+                          </span>
+                          <div className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all ${
+                            isSelected
+                              ? isAralinks
+                                ? 'bg-blue-600 border-blue-600 text-white'
+                                : 'bg-purple-600 border-purple-600 text-white'
+                              : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700'
+                          }`}>
+                            {isSelected && <Check size={12} strokeWidth={3} />}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -940,6 +1194,58 @@ const Users: React.FC<UsersProps> = ({ isDarkMode = false, userRole = 'Staff', c
                     >
                       {showPassword ? <EyeOff size={18} strokeWidth={2.5} /> : <Eye size={18} strokeWidth={2.5} />}
                     </button>
+                  </div>
+                </div>
+
+                {/* Team Multi-Selection */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                      Assigned Team(s)
+                    </label>
+                    <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                      Multiple selection allowed
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {TEAMS.map((teamName) => {
+                      const isSelected = newUser.teams.includes(teamName);
+                      const isAralinks = teamName === 'Aralinks';
+                      return (
+                        <button
+                          key={teamName}
+                          type="button"
+                          onClick={() => toggleTeam(teamName)}
+                          className={`h-11 px-3.5 rounded-xl font-bold text-xs flex items-center justify-between transition-all border ${
+                            isSelected
+                              ? isAralinks
+                                ? isDarkMode 
+                                  ? 'bg-blue-500/20 border-blue-500 text-blue-300 shadow-sm' 
+                                  : 'bg-blue-50 border-blue-300 text-blue-700 shadow-sm'
+                                : isDarkMode 
+                                  ? 'bg-purple-500/20 border-purple-500 text-purple-300 shadow-sm' 
+                                  : 'bg-purple-50 border-purple-300 text-purple-700 shadow-sm'
+                              : isDarkMode
+                                ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700/60'
+                                : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className={`w-2.5 h-2.5 rounded-full ${isAralinks ? 'bg-blue-500' : 'bg-purple-500'}`} />
+                            {teamName}
+                          </span>
+                          <div className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all ${
+                            isSelected
+                              ? isAralinks
+                                ? 'bg-blue-600 border-blue-600 text-white'
+                                : 'bg-purple-600 border-purple-600 text-white'
+                              : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700'
+                          }`}>
+                            {isSelected && <Check size={12} strokeWidth={3} />}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
