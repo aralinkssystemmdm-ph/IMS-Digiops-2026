@@ -32,6 +32,7 @@ interface SchoolMonitoringRecord {
   updated_at?: string;
   school_monitoring_id?: string;
   type_of_document?: string;
+  team?: string;
 }
 
 interface SchoolOption {
@@ -318,6 +319,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [program, setProgram] = useState('');
   const [customerCode, setCustomerCode] = useState('');
   const [salesTeam, setSalesTeam] = useState('');
+  const [team, setTeam] = useState('');
   const [classOpening, setClassOpening] = useState('');
   const [targetDeploymentDate, setTargetDeploymentDate] = useState('');
   const [currentStatus, setCurrentStatus] = useState<number>(1);
@@ -347,6 +349,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [showEquipmentSuggestions, setShowEquipmentSuggestions] = useState(false);
   const [selectedProgramFilter, setSelectedProgramFilter] = useState('ALL');
   const [selectedSalesTeamFilter, setSelectedSalesTeamFilter] = useState('ALL');
+  const [teamFilter, setTeamFilter] = useState('ALL');
 
   // Multiplier modal states for bundle dispatch
   const [isMultiplierModalOpen, setIsMultiplierModalOpen] = useState(false);
@@ -773,6 +776,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 school_name: row.school_name,
                 program: program,
                 sales_team: row.sales_team,
+                team: row.team || '',
                 class_opening: row.class_opening,
                 target_deployment_date: row.target_deployment_date,
                 status: Number(row.status) || 1,
@@ -1001,6 +1005,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 school_name: rec.school_name,
                 program: rec.program || null,
                 sales_team: rec.sales_team,
+                team: rec.team || null,
                 class_opening: rec.class_opening,
                 target_deployment_date: rec.target_deployment_date,
                 status: rec.status,
@@ -1279,6 +1284,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setProgram('');
     setCustomerCode('');
     setSalesTeam('');
+    setTeam('');
     setClassOpening('');
     setTargetDeploymentDate('');
     setCurrentStatus(1);
@@ -1303,6 +1309,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setProgram(record.program || '');
     setCustomerCode(record.customer_code);
     setSalesTeam(record.sales_team);
+    setTeam(record.team || '');
     setClassOpening(record.class_opening);
     setTargetDeploymentDate(record.target_deployment_date);
     setCurrentStatus(record.status);
@@ -1483,6 +1490,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               program: program,
               customer_code: finalCustomerCode,
               sales_team: salesTeam,
+              team: team,
               class_opening: classOpening,
               target_deployment_date: targetDeploymentDate,
               status: currentStatus,
@@ -1505,6 +1513,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           program: program,
           customer_code: finalCustomerCode,
           sales_team: salesTeam,
+          team: team,
           class_opening: classOpening,
           target_deployment_date: targetDeploymentDate,
           status: currentStatus,
@@ -1542,14 +1551,20 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     }));
   };
 
-  // Calculated counts per status
+  // Records filtered by team for status overview calculations
+  const teamFilteredRecords = useMemo(() => {
+    if (teamFilter === 'ALL' || teamFilter === 'All Teams') return records;
+    return records.filter(r => r.team && r.team.toLowerCase() === teamFilter.toLowerCase());
+  }, [records, teamFilter]);
+
+  // Calculated counts per status (aligned with active team filter)
   const countsPerStatus = useMemo(() => {
     const map: Record<number, number> = {};
     for (let s = 1; s <= 7; s++) {
-      map[s] = records.filter(r => r.status === s).length;
+      map[s] = teamFilteredRecords.filter(r => r.status === s).length;
     }
     return map;
-  }, [records]);
+  }, [teamFilteredRecords]);
 
   // Get unique programs dynamically from records
   const uniquePrograms = useMemo(() => {
@@ -1584,6 +1599,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     }
     if (selectedSalesTeamFilter !== 'ALL') {
       result = result.filter(r => r.sales_team === selectedSalesTeamFilter);
+    }
+    if (teamFilter !== 'ALL') {
+      result = result.filter(r => r.team && r.team.toLowerCase() === teamFilter.toLowerCase());
     }
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -1658,7 +1676,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       }
       return sortDirection === 'desc' ? -comparison : comparison;
     });
-  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedSalesTeamFilter, sortField, sortDirection]);
+  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedSalesTeamFilter, teamFilter, sortField, sortDirection]);
 
   // Filtered equipment catalog items
   const filteredEquipment = useMemo(() => {
@@ -1686,6 +1704,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       'School Name',
       'Program',
       'Sales Team',
+      'Assigned Team',
       'Class Opening',
       'Target Deployment Date',
       'Current Status Stage',
@@ -1704,6 +1723,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         r.school_name || '',
         r.program || '',
         r.sales_team || '',
+        r.team || '',
         r.class_opening ? formatStepDate(r.class_opening) : '',
         r.target_deployment_date ? formatStepDate(r.target_deployment_date) : '',
         r.status,
@@ -1769,19 +1789,46 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           
           {/* INTERACTIVE METRIC BUTTON DASHBOARD */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1.5 leading-none">
-                <span className="w-2 h-2 rounded-full bg-brand-orange animate-pulse"></span>
-                School Current Status
-              </p>
-              {selectedStatusFilter !== null && (
-                <button
-                  onClick={() => setSelectedStatusFilter(null)}
-                  className="text-[10px] font-bold text-brand-orange hover:underline uppercase tracking-wider bg-brand-orange/5 px-2.5 py-1 rounded-md transition-all cursor-pointer"
-                >
-                  Clear Status Filter ×
-                </button>
-              )}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1.5 leading-none">
+                  <span className="w-2 h-2 rounded-full bg-brand-orange animate-pulse"></span>
+                  School Current Status
+                </p>
+                {teamFilter !== 'ALL' && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-brand-orange/10 text-brand-orange">
+                    {teamFilter}
+                  </span>
+                )}
+              </div>
+
+              {/* Team Filter align with School Current Status */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className={`flex items-center p-1 rounded-xl border ${isDarkMode ? 'bg-slate-800/60 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+                  {['ALL', 'Aralinks', 'Protrack'].map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setTeamFilter(t)}
+                      className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        teamFilter === t 
+                          ? (isDarkMode ? 'bg-slate-700 text-white shadow-sm' : 'bg-white text-slate-900 shadow-sm') 
+                          : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                      }`}
+                    >
+                      {t === 'ALL' ? 'All Teams' : t}
+                    </button>
+                  ))}
+                </div>
+
+                {selectedStatusFilter !== null && (
+                  <button
+                    onClick={() => setSelectedStatusFilter(null)}
+                    className="text-[10px] font-bold text-brand-orange hover:underline uppercase tracking-wider bg-brand-orange/5 px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                  >
+                    Clear Status Filter ×
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
@@ -1798,13 +1845,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                   <span className={`text-[9.5px] font-bold uppercase tracking-wider leading-none ${
                     selectedStatusFilter === null ? 'text-brand-orange' : 'text-slate-400 group-hover/total:text-brand-orange/80'
                   }`}>
-                    ALL SCHOOLS
+                    {teamFilter !== 'ALL' ? `${teamFilter.toUpperCase()} SCHOOLS` : 'ALL SCHOOLS'}
                   </span>
                   <School size={13} className={selectedStatusFilter === null ? 'text-brand-orange' : 'text-slate-400 group-hover/total:scale-110 transition-transform'} />
                 </div>
                 <div className="mt-3.5 flex items-baseline gap-1.5">
                   <span className="text-2xl font-black font-poppins tracking-tight text-slate-900 dark:text-white leading-none">
-                    {records.length}
+                    {teamFilteredRecords.length}
                   </span>
                   <span className="text-[9.5px] font-bold text-slate-400 uppercase tracking-widest">
                     Units
@@ -1917,11 +1964,12 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               </div>
 
               {/* Clear filters button if active */}
-              {(selectedProgramFilter !== 'ALL' || selectedSalesTeamFilter !== 'ALL') && (
+              {(selectedProgramFilter !== 'ALL' || selectedSalesTeamFilter !== 'ALL' || teamFilter !== 'ALL') && (
                 <button
                   onClick={() => {
                     setSelectedProgramFilter('ALL');
                     setSelectedSalesTeamFilter('ALL');
+                    setTeamFilter('ALL');
                   }}
                   className="text-[10.5px] font-black text-brand-orange hover:underline uppercase tracking-wider self-center whitespace-nowrap"
                 >
@@ -2043,6 +2091,22 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                     </th>
                     <th 
                       className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('team')}
+                      title="Sort by Team"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Team</span>
+                        <div className={`transition-all duration-200 ${sortField === 'team' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'team' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
                       onClick={() => handleSort('class_opening')}
                       title="Sort by Class Opening"
                     >
@@ -2128,6 +2192,15 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                           </td>
                           <td className="px-5 py-4 text-xs text-slate-600 dark:text-slate-300 font-semibold">
                             {record.sales_team}
+                          </td>
+                          <td className="px-5 py-4">
+                            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                              record.team?.toLowerCase() === 'aralinks' ? (isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600') :
+                              record.team?.toLowerCase() === 'protrack' ? (isDarkMode ? 'bg-purple-500/10 text-purple-400' : 'bg-purple-50 text-purple-600') :
+                              (isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-500')
+                            }`}>
+                              {record.team ? toTitleCase(record.team) : 'N/A'}
+                            </span>
                           </td>
                           <td className="px-5 py-4 text-xs text-slate-500 dark:text-slate-400 font-mono">
                             {record.class_opening ? formatStepDate(record.class_opening) : '--'}
@@ -2406,6 +2479,10 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                                       <p className="font-extrabold text-slate-800 dark:text-slate-200">{record.sales_team}</p>
                                     </div>
                                     <div>
+                                      <span className="text-[10px] uppercase text-slate-450 font-black">Assigned Team</span>
+                                      <p className="font-extrabold text-slate-800 dark:text-slate-200">{record.team || 'None'}</p>
+                                    </div>
+                                    <div>
                                       <span className="text-[10px] uppercase text-slate-450 font-black">Scheduled Class Start</span>
                                       <p className="font-semibold text-slate-800 dark:text-slate-200">
                                         {record.class_opening ? formatStepDate(record.class_opening) : 'None designated'}
@@ -2626,6 +2703,21 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                         disabled
                         className="w-full border border-slate-155 dark:border-slate-800 bg-slate-100 dark:bg-slate-955 p-2 text-sm text-slate-550 font-bold rounded-lg focus:outline-none"
                       />
+                    </div>
+
+                    {/* Assigned Team */}
+                    <div className="sm:col-span-4 flex flex-col gap-1 mt-1">
+                      <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Assigned Team</label>
+                      <select
+                        value={team}
+                        onChange={(e) => setTeam(e.target.value)}
+                        className="w-full border border-slate-200 dark:border-slate-850 bg-white dark:bg-slate-900 rounded-lg p-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand-orange text-slate-800 dark:text-white"
+                        required
+                      >
+                        <option value="" disabled>Select Team</option>
+                        <option value="Aralinks">Aralinks</option>
+                        <option value="Protrack">Protrack</option>
+                      </select>
                     </div>
                   </div>
 
@@ -3634,6 +3726,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               <th className="py-2.5 px-2">School Name</th>
               <th className="py-2.5 px-2">Program</th>
               <th className="py-2.5 px-2">Sales Team</th>
+              <th className="py-2.5 px-2">Team</th>
               <th className="py-2.5 px-2">Class Opening</th>
               <th className="py-2.5 px-2">Target Date</th>
               <th className="py-2.5 px-2">Status Stage</th>
@@ -3661,6 +3754,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                   <td className="py-2 px-2 font-extrabold text-slate-900">{r.school_name}</td>
                   <td className="py-2 px-2 font-semibold text-slate-700 uppercase">{r.program || 'OTHER'}</td>
                   <td className="py-2 px-2 text-slate-700">{r.sales_team}</td>
+                  <td className="py-2 px-2 text-slate-700">{r.team ? toTitleCase(r.team) : 'None'}</td>
                   <td className="py-2 px-2 font-mono text-slate-700">{r.class_opening ? formatStepDate(r.class_opening) : '--'}</td>
                   <td className="py-2 px-2 font-mono text-slate-700">{r.target_deployment_date ? formatStepDate(r.target_deployment_date) : '--'}</td>
                   <td className="py-2 px-2 font-bold uppercase text-slate-900">{statusLabel} (S{r.status})</td>

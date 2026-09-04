@@ -67,6 +67,7 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
   const [selectedItem, setSelectedItem] = useState<EquipmentItem | null>(null);
   const [itemSearch, setItemSearch] = useState('');
   const [itemFilter, setItemFilter] = useState<'All' | 'Serialized' | 'Non-Serialized'>('All');
+  const [selectedTeam, setSelectedTeam] = useState<'Aralinks' | 'Protrack' | null>(null);
   const [isItemDropdownOpen, setIsItemDropdownOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const itemDropdownRef = useRef<HTMLDivElement>(null);
@@ -194,6 +195,7 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
     setSelectedItem(null);
     setItemSearch('');
     setItemFilter('All');
+    setSelectedTeam(null);
     setLocationEntries([
       { 
         id: Math.random().toString(36).substr(2, 9), 
@@ -329,6 +331,11 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
       return;
     }
 
+    if (!selectedTeam) {
+      setError('Please select a team (Aralinks or Protrack).');
+      return;
+    }
+
     const isSerialized = selectedItem.is_serialized === true || 
                          selectedItem.is_serialized === 'YES' || 
                          String(selectedItem.is_serialized).toUpperCase() === 'TRUE';
@@ -461,7 +468,8 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
             transaction_type: 'Initial',
             reference_id: generatedRef,
             created_by: currentUser,
-            reason: entry.remarks || (existingStock ? 'Manual Setup - Stock Addition' : 'Manual Setup - Initial Inventory')
+            reason: entry.remarks || (existingStock ? 'Manual Setup - Stock Addition' : 'Manual Setup - Initial Inventory'),
+            team: selectedTeam ? selectedTeam.toLowerCase() : null
           }]);
 
         if (txError) throw txError;
@@ -476,7 +484,8 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
               brand_new_qty: (existingStock.brand_new_qty || 0) + entry.conditions.brand_new,
               used_qty: (existingStock.used_qty || 0) + entry.conditions.used,
               defective_qty: (existingStock.defective_qty || 0) + entry.conditions.defective,
-              disposal_qty: (existingStock.disposal_qty || 0) + entry.conditions.disposal
+              disposal_qty: (existingStock.disposal_qty || 0) + entry.conditions.disposal,
+              team: selectedTeam ? selectedTeam.toLowerCase() : existingStock.team
             })
             .eq('id', existingStock.id);
           
@@ -493,7 +502,8 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
               brand_new_qty: entry.conditions.brand_new,
               used_qty: entry.conditions.used,
               defective_qty: entry.conditions.defective,
-              disposal_qty: entry.conditions.disposal
+              disposal_qty: entry.conditions.disposal,
+              team: selectedTeam ? selectedTeam.toLowerCase() : null
             }]);
 
           if (stockError) {
@@ -504,7 +514,8 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
                 item_code: selectedItem.item_code,
                 item_name: selectedItem.description,
                 location: entry.location,
-                quantity: entry.totalQty
+                quantity: entry.totalQty,
+                team: selectedTeam ? selectedTeam.toLowerCase() : null
               }]);
             if (fallbackError) throw fallbackError;
           }
@@ -716,6 +727,37 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* Team Selection */}
+            <div className="space-y-3">
+              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Assigned Team <span className="text-red-500">*</span></label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTeam('Aralinks')}
+                  className={`p-4 rounded-xl border-2 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                    selectedTeam === 'Aralinks' 
+                      ? 'bg-blue-500/10 border-blue-500 text-blue-600 dark:text-blue-400' 
+                      : (isDarkMode ? 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-blue-500/30')
+                  }`}
+                >
+                  <div className={`w-3 h-3 rounded-full border-2 ${selectedTeam === 'Aralinks' ? 'border-blue-500 bg-blue-500' : 'border-slate-300 dark:border-slate-600'}`} />
+                  Aralinks
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTeam('Protrack')}
+                  className={`p-4 rounded-xl border-2 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                    selectedTeam === 'Protrack' 
+                      ? 'bg-purple-500/10 border-purple-500 text-purple-600 dark:text-purple-400' 
+                      : (isDarkMode ? 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-purple-500/50' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-purple-500/30')
+                  }`}
+                >
+                  <div className={`w-3 h-3 rounded-full border-2 ${selectedTeam === 'Protrack' ? 'border-purple-500 bg-purple-500' : 'border-slate-300 dark:border-slate-600'}`} />
+                  Protrack
+                </button>
+              </div>
             </div>
 
             {/* Multi-Location Blocks */}

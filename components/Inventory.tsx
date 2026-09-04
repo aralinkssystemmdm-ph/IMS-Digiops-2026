@@ -29,10 +29,12 @@ import {
   Recycle,
   Download,
   Paperclip,
-  RotateCcw
+  RotateCcw,
+  RefreshCw
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { toTitleCase } from '../lib/utils';
+import { useNotification } from './NotificationProvider';
 import PageHeader from './PageHeader';
 import AddStockModal from './AddStockModal';
 import InventoryDetailsModal from './InventoryDetailsModal';
@@ -50,6 +52,7 @@ interface InventoryItem {
   is_serialized?: boolean;
   has_serials?: boolean;
   has_history?: boolean;
+  team?: string;
 }
 
 interface LocationStock {
@@ -87,16 +90,20 @@ const Inventory: React.FC<InventoryProps> = ({
   isDarkMode = false,
   userRole = 'Staff'
 }) => {
+  const { showSuccess, showError } = useNotification();
+  const [isSyncingStocks, setIsSyncingStocks] = useState(false);
   const [inventoryData, setInventoryData] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Statuses');
   const [locationFilter, setLocationFilter] = useState('All Locations');
   const [conditionFilter, setConditionFilter] = useState('All Conditions');
+  const [teamFilter, setTeamFilter] = useState('All Teams');
   const [availableLocations, setAvailableLocations] = useState<string[]>([]);
   const [allLocationStocks, setAllLocationStocks] = useState<any[]>([]);
   const [isLocFilterOpen, setIsLocFilterOpen] = useState(false);
   const [isCondFilterOpen, setIsCondFilterOpen] = useState(false);
+  const [isTeamFilterOpen, setIsTeamFilterOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [transferCurrentPage, setTransferCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState<number | 'all'>(20);
@@ -250,6 +257,15 @@ const Inventory: React.FC<InventoryProps> = ({
         });
       }
 
+      const teamMap = new Map<string, string>();
+      if (locStocksData) {
+        locStocksData.forEach((row: any) => {
+          if (row.item_code && row.team) {
+            teamMap.set(row.item_code.trim().toUpperCase(), row.team);
+          }
+        });
+      }
+
       const combinedData: InventoryItem[] = [];
       const processedCodes = new Set<string>();
 
@@ -260,6 +276,7 @@ const Inventory: React.FC<InventoryProps> = ({
           processedCodes.add(codeUpper);
 
           const summaryRow = summaryMap.get(codeUpper);
+          const itemTeam = teamMap.get(codeUpper) || undefined;
           const totalQty = summaryRow ? (summaryRow.total_quantity || 0) : 0;
           const critLevel = summaryRow?.critical_level ?? equip.critical_level ?? 0;
           const hasTx = txCodesSet.has(codeUpper);
@@ -274,7 +291,8 @@ const Inventory: React.FC<InventoryProps> = ({
             status: totalQty <= critLevel ? 'Critical' : 'Available',
             is_serialized: equip.is_serialized || summaryRow?.is_serialized || false,
             has_serials: hasSerials,
-            has_history: hasHistory
+            has_history: hasHistory,
+            team: itemTeam
           });
         });
       }
@@ -284,6 +302,7 @@ const Inventory: React.FC<InventoryProps> = ({
           const codeUpper = (summaryRow.item_code || '').trim().toUpperCase();
           if (codeUpper && !processedCodes.has(codeUpper)) {
             processedCodes.add(codeUpper);
+            const itemTeam = teamMap.get(codeUpper) || undefined;
             const totalQty = summaryRow.total_quantity || 0;
             const critLevel = summaryRow.critical_level || 0;
             const hasTx = txCodesSet.has(codeUpper);
@@ -298,7 +317,8 @@ const Inventory: React.FC<InventoryProps> = ({
               status: totalQty <= critLevel ? 'Critical' : 'Available',
               is_serialized: summaryRow.is_serialized || false,
               has_serials: hasSerials,
-              has_history: hasHistory
+              has_history: hasHistory,
+              team: itemTeam
             });
           }
         });
@@ -357,6 +377,88 @@ const Inventory: React.FC<InventoryProps> = ({
       setLoadingTransfers(false);
     }
   }, []);
+
+  const handleSyncStocksWithTransactions = async () => {
+    if (!isSupabaseConfigured || isSyncingStocks) return;
+    setIsSyncingStocks(true);
+    try {
+      const [txRes, stockRes] = await Promise.all([
+        supabase.from('stock_transactions').select('*'),
+        supabase.from('item_location_stocks').select('*')
+      ]);
+
+      if (txRes.error) throw txRes.error;
+      if (stockRes.error) throw stockRes.error;
+
+      const txs = txRes.data || [];
+      const stocks = stockRes.data || [];
+
+      // Compute net quantity per item_code and location from transactions ledger
+      const computed: Record<string, number> = {};
+      for (const tx of txs) {
+        const qty = parseInt(tx.quantity) || 0;
+        const type = (tx.transaction_type || '').trim();
+        const toLoc = (tx.to_location || tx.location || '').trim();
+        const fromLoc = (tx.from_location || '').trim();
+        const code = (tx.item_code || '').trim();
+
+        if (!code) continue;
+
+        if (type === 'Transfer') {
+          if (fromLoc) {
+            const kFrom = `${code}:::${fromLoc}`;
+            computed[kFrom] = (computed[kFrom] || 0) - qty;
+          }
+          if (toLoc) {
+            const kTo = `${code}:::${toLoc}`;
+            computed[kTo] = (computed[kTo] || 0) + qty;
+          }
+        } else if (['Dispatch', 'Out', 'Reduction', 'Pullout'].includes(type)) {
+          const loc = fromLoc || toLoc;
+          if (loc) {
+            const k = `${code}:::${loc}`;
+            computed[k] = (computed[k] || 0) - qty;
+          }
+        } else {
+          // Delivery, Initial Stock, In, Addition, Return, Adjustment
+          if (toLoc) {
+            const k = `${code}:::${toLoc}`;
+            computed[k] = (computed[k] || 0) + qty;
+          }
+        }
+      }
+
+      let correctedCount = 0;
+      for (const s of stocks) {
+        const k = `${s.item_code.trim()}:::${s.location.trim()}`;
+        const expected = computed[k] !== undefined ? computed[k] : 0;
+        if (s.quantity !== expected) {
+          const diff = expected - s.quantity;
+          await supabase
+            .from('item_location_stocks')
+            .update({
+              quantity: Math.max(0, expected),
+              brand_new_qty: Math.max(0, (s.brand_new_qty || 0) + diff),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', s.id);
+          correctedCount++;
+        }
+      }
+
+      await fetchInventoryData();
+      if (correctedCount > 0) {
+        showSuccess('Stocks Synchronized', `Successfully synchronized ${correctedCount} stock record(s) with transaction history.`);
+      } else {
+        showSuccess('Stocks Verified', 'All inventory stock levels match the transaction history.');
+      }
+    } catch (err: any) {
+      console.error('Error syncing stocks:', err);
+      showError('Sync Error', err.message || 'Failed to synchronize stocks with transaction history.');
+    } finally {
+      setIsSyncingStocks(false);
+    }
+  };
 
   const fetchLocationBreakdown = useCallback(async (itemCode: string) => {
     setLoadingLocations(true);
@@ -461,8 +563,18 @@ const Inventory: React.FC<InventoryProps> = ({
   }, [searchQuery]);
 
   const filteredTransfers = useMemo(() => {
-    return transferHistory;
-  }, [transferHistory]);
+    return transferHistory.filter(req => {
+      const matchesSearch = !searchQuery || 
+        req.req_no.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (req.program && req.program.toLowerCase().includes(searchQuery.toLowerCase()));
+
+      const matchesTeam = 
+        teamFilter === 'All Teams' ||
+        (req.team && req.team.toLowerCase() === teamFilter.toLowerCase());
+
+      return matchesSearch && matchesTeam;
+    });
+  }, [transferHistory, searchQuery, teamFilter]);
 
   const handleViewLocations = (item: InventoryItem) => {
     setSelectedItem(item);
@@ -543,9 +655,13 @@ const Inventory: React.FC<InventoryProps> = ({
           statusFilter === 'All Statuses' || 
           item.status === statusFilter;
 
-        return matchesSearch && matchesStatus;
+        const matchesTeam = 
+          teamFilter === 'All Teams' ||
+          (item.team && item.team.toLowerCase() === teamFilter.toLowerCase());
+
+        return matchesSearch && matchesStatus && matchesTeam;
       });
-  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks]);
+  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks, teamFilter]);
 
   const handleSort = (field: 'item_code' | 'item_name') => {
     if (sortField === field) {
@@ -965,6 +1081,8 @@ const Inventory: React.FC<InventoryProps> = ({
               <Download size={18} style={{ color: 'var(--brand-accent)' }} />
               <span>Export Report</span>
             </button>
+
+
           </div>
         ) : (
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -1058,50 +1176,7 @@ const Inventory: React.FC<InventoryProps> = ({
                 )}
               </div>
 
-              {/* Location Filter */}
-              <div className="relative flex-1 lg:flex-none">
-                <button 
-                  onClick={() => setIsLocFilterOpen(!isLocFilterOpen)}
-                  className={`w-full px-5 py-3 rounded-lg border transition-all flex items-center justify-between lg:justify-start gap-3 text-xs font-bold tracking-wider shadow-sm ${
-                    isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <MapPin size={16} style={{ color: 'var(--brand-accent)' }} />
-                  {locationFilter === 'All Locations' ? 'LOCATION: ALL' : `LOCATION: ${locationFilter.toUpperCase()}`}
-                  <ChevronRight className={`ml-auto transition-transform duration-300 ${isLocFilterOpen ? 'rotate-90' : ''}`} size={14} />
-                </button>
-                
-                {isLocFilterOpen && (
-                  <div className={`absolute top-full left-0 mt-2 w-full sm:w-64 rounded-lg shadow-xl py-2 z-[100] animate-in fade-in slide-in-from-top-2 border ${
-                    isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'
-                  }`}>
-                    <button 
-                      onClick={() => { setLocationFilter('All Locations'); setIsLocFilterOpen(false); }}
-                      className={`w-full text-left px-6 py-3 text-xs font-semibold tracking-wider transition-all flex items-center gap-3 group
-                        ${locationFilter === 'All Locations' ? (isDarkMode ? 'bg-white/5 text-white' : 'bg-slate-50 text-slate-900') : (isDarkMode ? 'text-slate-400' : 'text-slate-500') + ' hover:bg-white/5'}
-                      `}
-                    >
-                      <MapPin size={14} style={{ color: 'var(--brand-accent)' }} />
-                      <span>All Locations</span>
-                    </button>
-                    {availableLocations.map((loc) => {
-                      const isActive = locationFilter === loc;
-                      return (
-                        <button 
-                          key={loc}
-                          onClick={() => { setLocationFilter(loc); setIsLocFilterOpen(false); }}
-                          className={`w-full text-left px-6 py-3 text-xs font-semibold tracking-wider transition-all flex items-center gap-3 group
-                            ${isActive ? (isDarkMode ? 'bg-white/5 text-white' : 'bg-slate-50 text-slate-900') : (isDarkMode ? 'text-slate-400' : 'text-slate-500') + ' hover:bg-white/5'}
-                          `}
-                        >
-                          <div className="w-2 h-2 rounded-full shrink-0 bg-slate-300 dark:bg-slate-600" />
-                          <span className="flex-grow">{loc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+
 
               {/* Condition Filter */}
               <div className="relative flex-1 lg:flex-none">
@@ -1146,13 +1221,31 @@ const Inventory: React.FC<InventoryProps> = ({
                 )}
               </div>
 
+              {/* Team Filter */}
+              <div className={`flex items-center p-1 rounded-lg border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+                {['All Teams', 'Aralinks', 'Protrack'].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTeamFilter(t)}
+                    className={`px-4 py-2 text-xs font-bold rounded-md transition-all ${
+                      teamFilter === t 
+                        ? (isDarkMode ? 'bg-slate-700 text-white shadow-sm' : 'bg-white text-slate-800 shadow-sm') 
+                        : (isDarkMode ? 'text-slate-400 hover:text-slate-300' : 'text-slate-500 hover:text-slate-700')
+                    }`}
+                  >
+                    {t === 'All Teams' ? 'All' : t}
+                  </button>
+                ))}
+              </div>
+
               {/* Reset Filters */}
-              {(statusFilter !== 'All Statuses' || locationFilter !== 'All Locations' || conditionFilter !== 'All Conditions' || searchQuery !== '') && (
+              {(statusFilter !== 'All Statuses' || conditionFilter !== 'All Conditions' || teamFilter !== 'All Teams' || searchQuery !== '') && (
                 <button
                   onClick={() => {
                     setStatusFilter('All Statuses');
                     setLocationFilter('All Locations');
                     setConditionFilter('All Conditions');
+                    setTeamFilter('All Teams');
                     setSearchQuery('');
                   }}
                   className="px-5 py-3 rounded-lg border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 text-xs font-bold tracking-wider hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center gap-2 flex-1 lg:flex-none justify-center"
@@ -1164,15 +1257,36 @@ const Inventory: React.FC<InventoryProps> = ({
               )}
             </>
           ) : (
-            searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="px-5 py-3 rounded-lg border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 text-xs font-bold tracking-wider hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center gap-2 flex-1 lg:flex-none justify-center"
-              >
-                <RotateCcw size={16} />
-                CLEAR SEARCH
-              </button>
-            )
+            <>
+              {/* Team Filter for Transfers */}
+              <div className={`flex items-center p-1 rounded-lg border ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-slate-100 border-slate-200'}`}>
+                {['All Teams', 'Aralinks', 'Protrack'].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setTeamFilter(t)}
+                    className={`px-4 py-2 text-xs font-bold rounded-md transition-all ${
+                      teamFilter === t 
+                        ? (isDarkMode ? 'bg-slate-700 text-white shadow-sm' : 'bg-white text-slate-800 shadow-sm') 
+                        : (isDarkMode ? 'text-slate-400 hover:text-slate-300' : 'text-slate-500 hover:text-slate-700')
+                    }`}
+                  >
+                    {t === 'All Teams' ? 'All' : t}
+                  </button>
+                ))}
+              </div>
+              {(searchQuery || teamFilter !== 'All Teams') && (
+                <button
+                  onClick={() => {
+                    setSearchQuery('');
+                    setTeamFilter('All Teams');
+                  }}
+                  className="px-5 py-3 rounded-lg border border-red-200 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 text-xs font-bold tracking-wider hover:bg-red-100 dark:hover:bg-red-900/20 transition-all flex items-center gap-2 flex-1 lg:flex-none justify-center"
+                >
+                  <RotateCcw size={16} />
+                  RESET ALL
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -1212,6 +1326,7 @@ const Inventory: React.FC<InventoryProps> = ({
                       </div>
                     </div>
                   </th>
+                  <th className="px-6 py-4 text-[11px] font-semibold uppercase tracking-wider text-gray-700 dark:text-slate-400 text-left">Team</th>
                   <th className="px-6 py-4 text-[11px] font-semibold uppercase tracking-wider text-gray-700 dark:text-slate-400 text-center">Total Qty</th>
                   <th className="px-6 py-4 text-[11px] font-semibold uppercase tracking-wider text-gray-700 dark:text-slate-400 text-center">Locations</th>
                   <th className="px-6 py-4 text-[11px] font-semibold uppercase tracking-wider text-gray-700 dark:text-slate-400 text-center">Status</th>
@@ -1242,6 +1357,15 @@ const Inventory: React.FC<InventoryProps> = ({
                           <Box size={16} style={{ color: 'var(--brand-accent)' }} />
                           <span className={`text-sm font-bold tracking-tight ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>{item.item_name}</span>
                         </div>
+                      </td>
+                      <td className="px-6 py-4 text-left">
+                        <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                          item.team?.toLowerCase() === 'aralinks' ? (isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600') :
+                          item.team?.toLowerCase() === 'protrack' ? (isDarkMode ? 'bg-purple-500/10 text-purple-400' : 'bg-purple-50 text-purple-600') :
+                          (isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-500')
+                        }`}>
+                          {item.team ? toTitleCase(item.team) : 'N/A'}
+                        </span>
                       </td>
                       <td className="px-6 py-4 text-center">
                         <span className={`text-base font-bold ${isCritical ? 'text-red-500' : isDarkMode ? 'text-white' : 'text-slate-900'}`}>{item.total_quantity}</span>
@@ -1624,6 +1748,7 @@ const Inventory: React.FC<InventoryProps> = ({
               <tr className={`border-b ${isDarkMode ? 'border-slate-800' : 'border-slate-100'}`}>
                 <th className="pb-4 pl-4 text-[11px] font-semibold text-gray-700 dark:text-slate-400 uppercase tracking-wider">Date Transferred</th>
                 <th className="pb-4 text-[11px] font-semibold text-gray-700 dark:text-slate-400 uppercase tracking-wider">From Location To Location</th>
+                <th className="pb-4 text-[11px] font-semibold text-gray-700 dark:text-slate-400 uppercase tracking-wider">Team</th>
                 <th className="pb-4 text-[11px] font-semibold text-gray-700 dark:text-slate-400 uppercase tracking-wider">Transfer By</th>
                 <th className="pb-4 pr-4 text-right text-[11px] font-semibold text-gray-700 dark:text-slate-400 uppercase tracking-wider">Actions</th>
               </tr>
@@ -1660,6 +1785,15 @@ const Inventory: React.FC<InventoryProps> = ({
                               <span className={`text-sm font-black ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{req.to_location}</span>
                             </div>
                           </div>
+                        </td>
+                        <td className="py-5">
+                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                            req.team?.toLowerCase() === 'aralinks' ? (isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600') :
+                            req.team?.toLowerCase() === 'protrack' ? (isDarkMode ? 'bg-purple-500/10 text-purple-400' : 'bg-purple-50 text-purple-600') :
+                            (isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-500')
+                          }`}>
+                            {req.team ? toTitleCase(req.team) : 'N/A'}
+                          </span>
                         </td>
                         <td className="py-5">
                           <div className="flex items-center gap-2">

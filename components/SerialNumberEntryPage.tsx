@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Loader2, Hash, Box, ArrowLeft, Clipboard, Trash2, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, Hash, Box, ArrowLeft, Clipboard, Trash2, ChevronDown, ChevronUp, Calendar, Edit3, RotateCcw, X, History, Layers } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { toTitleCase } from '../lib/utils';
 import { useNotification } from './NotificationProvider';
@@ -28,6 +28,19 @@ interface SerialEntry {
   remarks?: string;
 }
 
+interface DeliveryHistoryRecord {
+  id: string;
+  item_code: string;
+  item_name?: string;
+  quantity: number;
+  reason?: string;
+  to_location: string;
+  created_at: string;
+  created_by?: string;
+  isSerialized: boolean;
+  serials: string[];
+}
+
 const SerialNumberEntryPage: React.FC = () => {
   const { requestId } = useParams<{ requestId: string }>();
   const navigate = useNavigate();
@@ -40,6 +53,24 @@ const SerialNumberEntryPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [deliveredDate, setDeliveredDate] = useState<string>('');
+  
+  // Deliverable Edit & Revert State
+  const [deliveryHistory, setDeliveryHistory] = useState<DeliveryHistoryRecord[]>([]);
+  const [editingDeliverable, setEditingDeliverable] = useState<{
+    id: string;
+    code: string;
+    name: string;
+    qty: number;
+    originalQty: number;
+    reason: string;
+    serials: string[];
+    to_location: string;
+    created_at: string;
+    isSerialized: boolean;
+  } | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [confirmDeleteTx, setConfirmDeleteTx] = useState<DeliveryHistoryRecord | null>(null);
+  const [isReverting, setIsReverting] = useState(false);
 
   // Calculate Summary Stats
   const stats = useMemo(() => {
@@ -120,15 +151,23 @@ const SerialNumberEntryPage: React.FC = () => {
         const itemCodes = requestData.request_items.map((i: any) => i.item_code);
         const { data: equipmentData } = await supabase
           .from('equipment')
-          .select('item_code, is_serialized')
+          .select('item_code, is_serialized, description')
           .in('item_code', itemCodes);
 
         // Fetch stock transactions to calculate correct previously received qty for this specific PO
         const { data: poTransactions } = await supabase
           .from('stock_transactions')
-          .select('item_code, quantity, reason')
+          .select('*')
           .eq('reference_id', requestId)
-          .eq('transaction_type', 'Delivery');
+          .eq('transaction_type', 'Delivery')
+          .order('created_at', { ascending: false });
+
+        // Fetch serials for this request
+        const { data: serialsData } = await supabase
+          .from('item_serials')
+          .select('id, item_code, serial_number, created_at')
+          .eq('request_id', requestId)
+          .order('created_at', { ascending: true });
 
         const taggedHistory: Record<string, number> = {};
         if (poTransactions && selectedPO) {
@@ -138,6 +177,35 @@ const SerialNumberEntryPage: React.FC = () => {
             }
           });
         }
+
+        // Build delivery history records
+        const hist: DeliveryHistoryRecord[] = [];
+        if (poTransactions) {
+          poTransactions.forEach((tx: any) => {
+            const equip = equipmentData?.find((e: any) => e.item_code === tx.item_code);
+            const reqItem = requestData.request_items?.find((i: any) => i.item_code === tx.item_code);
+            const itemName = reqItem?.item || equip?.description || tx.item_code;
+            const isSerialized = equip ? (equip.is_serialized === true || equip.is_serialized === 'YES') : (reqItem?.is_serialized || false);
+
+            const matchedSerials = (serialsData || [])
+              .filter((s: any) => s.item_code === tx.item_code)
+              .map((s: any) => s.serial_number);
+
+            hist.push({
+              id: tx.id,
+              item_code: tx.item_code,
+              item_name: itemName,
+              quantity: parseInt(tx.quantity) || 0,
+              reason: tx.reason,
+              to_location: tx.to_location || tx.location || requestData.location || 'IT Basement',
+              created_at: tx.created_at,
+              created_by: tx.created_by,
+              isSerialized: !!isSerialized,
+              serials: matchedSerials
+            });
+          });
+        }
+        setDeliveryHistory(hist);
 
         const allItems = requestData.request_items
           .filter((item: any) => {
@@ -203,6 +271,348 @@ const SerialNumberEntryPage: React.FC = () => {
     fetchData();
   }, [requestId, navigate]);
 
+  const handleSaveEditDeliverable = async () => {
+    if (!editingDeliverable || !requestId) return;
+    const { id, code, name, qty, originalQty, reason, serials, to_location, created_at, isSerialized } = editingDeliverable;
+
+    if (qty < 0) {
+      showError('Invalid Quantity', 'Quantity cannot be negative.');
+      return;
+    }
+
+    if (isSerialized && serials.filter(s => s.trim() !== '').length < qty) {
+      showWarning('Incomplete Serials', `Please enter all ${qty} serial numbers.`);
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const qtyDiff = qty - originalQty;
+      const loc = to_location || 'IT Basement';
+
+      // 1. Update item_location_stocks if quantity changed
+      if (qtyDiff !== 0) {
+        const { data: destStock } = await supabase
+          .from('item_location_stocks')
+          .select('id, quantity, brand_new_qty')
+          .eq('item_code', code)
+          .eq('location', loc)
+          .maybeSingle();
+
+        if (destStock) {
+          const newTotal = Math.max(0, (destStock.quantity || 0) + qtyDiff);
+          const newBrandNew = Math.max(0, (destStock.brand_new_qty || 0) + qtyDiff);
+          const { error: destUpdateError } = await supabase
+            .from('item_location_stocks')
+            .update({ 
+              quantity: newTotal,
+              brand_new_qty: newBrandNew,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', destStock.id);
+          if (destUpdateError) throw destUpdateError;
+        } else {
+          const { error: destInsertError } = await supabase
+            .from('item_location_stocks')
+            .insert([{
+              item_code: code,
+              item_name: name || code,
+              location: loc,
+              quantity: Math.max(0, qtyDiff),
+              brand_new_qty: Math.max(0, qtyDiff),
+              updated_at: new Date().toISOString()
+            }]);
+          if (destInsertError) throw destInsertError;
+        }
+
+      }
+
+      // 2. Handle Serials if serialized
+      if (isSerialized) {
+        const filteredSerials = serials.map(s => s.trim()).filter(Boolean);
+        const { data: existingSerials } = await supabase
+          .from('item_serials')
+          .select('*')
+          .eq('request_id', requestId)
+          .eq('item_code', code)
+          .order('created_at', { ascending: true });
+
+        if (existingSerials && existingSerials.length > 0) {
+          if (filteredSerials.length < existingSerials.length) {
+            const toRemove = existingSerials.slice(filteredSerials.length);
+            if (toRemove.length > 0) {
+              await supabase
+                .from('item_serials')
+                .delete()
+                .in('id', toRemove.map(s => s.id));
+            }
+          }
+          for (let i = 0; i < Math.min(filteredSerials.length, existingSerials.length); i++) {
+            if (filteredSerials[i] !== existingSerials[i].serial_number) {
+              await supabase
+                .from('item_serials')
+                .update({ serial_number: filteredSerials[i] })
+                .eq('id', existingSerials[i].id);
+            }
+          }
+          if (filteredSerials.length > existingSerials.length) {
+            const toAdd = filteredSerials.slice(existingSerials.length).map(sn => ({
+              request_id: requestId,
+              item_code: code,
+              serial_number: sn,
+              location: loc,
+              status: 'Available',
+              created_at: created_at || new Date().toISOString()
+            }));
+            await supabase.from('item_serials').insert(toAdd);
+          }
+        } else if (filteredSerials.length > 0) {
+          const toAdd = filteredSerials.map(sn => ({
+            request_id: requestId,
+            item_code: code,
+            serial_number: sn,
+            location: loc,
+            status: 'Available',
+            created_at: created_at || new Date().toISOString()
+          }));
+          await supabase.from('item_serials').insert(toAdd);
+        }
+      }
+
+      // 3. Update stock transaction
+      const { error: txErr } = await supabase
+        .from('stock_transactions')
+        .update({
+          quantity: qty,
+          reason: reason || null,
+          created_at: created_at
+        })
+        .eq('id', id);
+      if (txErr) throw txErr;
+
+      // 4. Query all Delivery transactions for this item code to get EXACT received quantity
+      const { data: allItemTxs } = await supabase
+        .from('stock_transactions')
+        .select('quantity')
+        .eq('reference_id', requestId)
+        .eq('item_code', code)
+        .eq('transaction_type', 'Delivery');
+
+      const exactDeliveredForItem = (allItemTxs || []).reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      // Update request_items with the exact delivered quantity
+      const { data: reqItems } = await supabase
+        .from('request_items')
+        .select('*')
+        .eq('request_control_no', requestId)
+        .eq('item_code', code);
+
+      if (reqItems && reqItems.length > 0) {
+        for (const ri of reqItems) {
+          const reqQty = parseInt(ri.qty) || 0;
+          const newStatus = exactDeliveredForItem >= reqQty && reqQty > 0 ? 'Delivered' : (exactDeliveredForItem > 0 ? 'Partially Delivered' : 'Pending');
+
+          const { error: riErr } = await supabase
+            .from('request_items')
+            .update({
+              received_quantity: exactDeliveredForItem,
+              status: newStatus
+            })
+            .eq('id', ri.id);
+          if (riErr) throw riErr;
+        }
+      }
+
+      // 5. Recalculate overall status & update item_requests
+      const { data: updatedReqItems } = await supabase
+        .from('request_items')
+        .select('received_quantity, qty')
+        .eq('request_control_no', requestId);
+
+      let finalRequestStatus = 'Pending';
+      let totalReq = 0;
+      let totalRec = 0;
+      if (updatedReqItems && updatedReqItems.length > 0) {
+        totalReq = updatedReqItems.reduce((s, i) => s + (parseInt(i.qty) || 0), 0);
+        totalRec = updatedReqItems.reduce((s, i) => s + (parseInt(i.received_quantity) || 0), 0);
+        const allDone = totalReq > 0 && totalRec >= totalReq;
+        const anyDelivered = totalRec > 0;
+        finalRequestStatus = allDone ? 'Delivered' : (anyDelivered ? 'Partially Delivered' : 'Pending');
+      }
+
+      const { data: remainingTxs } = await supabase
+        .from('stock_transactions')
+        .select('created_at')
+        .eq('reference_id', requestId)
+        .eq('transaction_type', 'Delivery')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const latestDeliveryDate = remainingTxs && remainingTxs.length > 0 ? remainingTxs[0].created_at : null;
+
+      await supabase
+        .from('item_requests')
+        .update({
+          status: finalRequestStatus,
+          delivered_at: finalRequestStatus === 'Delivered' ? (latestDeliveryDate || new Date().toISOString()) : (finalRequestStatus === 'Partially Delivered' ? latestDeliveryDate : null),
+          updated_at: new Date().toISOString()
+        })
+        .eq('control_no', requestId);
+
+      showSuccess('Deliverable Updated', 'Stock and quantities have been successfully recalculated.');
+      setEditingDeliverable(null);
+      
+      // Refresh local state
+      const { data: refReq } = await supabase
+        .from('item_requests')
+        .select('*, request_items(*)')
+        .eq('control_no', requestId)
+        .single();
+      if (refReq) {
+        // trigger reload
+        window.location.reload();
+      }
+    } catch (err: any) {
+      console.error('Error updating deliverable:', err);
+      showError('Error', err.message || 'Failed to update deliverable.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleRevertDelivery = async () => {
+    if (!confirmDeleteTx || !requestId) return;
+    const tx = confirmDeleteTx;
+    setIsReverting(true);
+
+    try {
+      const loc = tx.to_location || 'IT Basement';
+      const qtyToRevert = parseInt(String(tx.quantity)) || 0;
+
+      // 1. Deduct from item_location_stocks
+      const { data: destStock } = await supabase
+        .from('item_location_stocks')
+        .select('id, quantity, brand_new_qty')
+        .eq('item_code', tx.item_code)
+        .eq('location', loc)
+        .maybeSingle();
+
+      if (destStock) {
+        const newTotal = Math.max(0, (destStock.quantity || 0) - qtyToRevert);
+        const newBrandNew = Math.max(0, (destStock.brand_new_qty || 0) - qtyToRevert);
+        const { error: destUpdateError } = await supabase
+          .from('item_location_stocks')
+          .update({ 
+            quantity: newTotal,
+            brand_new_qty: newBrandNew,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', destStock.id);
+        if (destUpdateError) throw destUpdateError;
+      }
+
+      // 2. Delete serials associated with this delivery
+      const { data: serialsToDelete } = await supabase
+        .from('item_serials')
+        .select('id')
+        .eq('request_id', requestId)
+        .eq('item_code', tx.item_code)
+        .order('created_at', { ascending: false })
+        .limit(qtyToRevert);
+
+      if (serialsToDelete && serialsToDelete.length > 0) {
+        await supabase
+          .from('item_serials')
+          .delete()
+          .in('id', serialsToDelete.map(s => s.id));
+      }
+
+      // 3. Delete the transaction
+      const { error: delErr } = await supabase
+        .from('stock_transactions')
+        .delete()
+        .eq('id', tx.id);
+      if (delErr) throw delErr;
+
+      // 4. Query remaining delivery transactions to get EXACT received quantity for this item code
+      const { data: allItemTxs } = await supabase
+        .from('stock_transactions')
+        .select('quantity')
+        .eq('reference_id', requestId)
+        .eq('item_code', tx.item_code)
+        .eq('transaction_type', 'Delivery');
+
+      const exactDeliveredForItem = (allItemTxs || []).reduce((sum, t) => sum + (Number(t.quantity) || 0), 0);
+
+      const { data: reqItems } = await supabase
+        .from('request_items')
+        .select('*')
+        .eq('request_control_no', requestId)
+        .eq('item_code', tx.item_code);
+
+      if (reqItems && reqItems.length > 0) {
+        for (const ri of reqItems) {
+          const reqQty = parseInt(ri.qty) || 0;
+          const newStatus = exactDeliveredForItem >= reqQty && reqQty > 0 ? 'Delivered' : (exactDeliveredForItem > 0 ? 'Partially Delivered' : 'Pending');
+
+          await supabase
+            .from('request_items')
+            .update({
+              received_quantity: exactDeliveredForItem,
+              status: newStatus
+            })
+            .eq('id', ri.id);
+        }
+      }
+
+      // 5. Recalculate item_requests status & delivered_at
+      const { data: updatedReqItems } = await supabase
+        .from('request_items')
+        .select('received_quantity, qty')
+        .eq('request_control_no', requestId);
+
+      let finalRequestStatus = 'Pending';
+      let totalReq = 0;
+      let totalRec = 0;
+      let anyDelivered = false;
+      if (updatedReqItems && updatedReqItems.length > 0) {
+        totalReq = updatedReqItems.reduce((s, i) => s + (parseInt(i.qty) || 0), 0);
+        totalRec = updatedReqItems.reduce((s, i) => s + (parseInt(i.received_quantity) || 0), 0);
+        const allDone = totalReq > 0 && totalRec >= totalReq;
+        anyDelivered = totalRec > 0;
+        finalRequestStatus = allDone ? 'Delivered' : (anyDelivered ? 'Partially Delivered' : 'Pending');
+      }
+
+      const { data: remainingTxs } = await supabase
+        .from('stock_transactions')
+        .select('created_at')
+        .eq('reference_id', requestId)
+        .eq('transaction_type', 'Delivery')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const latestDeliveryDate = remainingTxs && remainingTxs.length > 0 ? remainingTxs[0].created_at : null;
+
+      await supabase
+        .from('item_requests')
+        .update({
+          status: finalRequestStatus,
+          delivered_at: finalRequestStatus === 'Delivered' ? (latestDeliveryDate || new Date().toISOString()) : (anyDelivered ? latestDeliveryDate : null),
+          updated_at: new Date().toISOString()
+        })
+        .eq('control_no', requestId);
+
+      showSuccess('Delivery Reverted', 'Received item reverted. Deliverable remaining quantity and stocks restored.');
+      setConfirmDeleteTx(null);
+      window.location.reload();
+    } catch (err: any) {
+      console.error('Error reverting delivery:', err);
+      showError('Error', err.message || 'Failed to revert delivery.');
+    } finally {
+      setIsReverting(false);
+    }
+  };
+
   const handleQtyChange = (id: string, value: string, isSerialized: boolean) => {
     const cleanValue = value.replace(/[^0-9]/g, '');
     const numericValue = parseInt(cleanValue) || 0;
@@ -210,9 +620,11 @@ const SerialNumberEntryPage: React.FC = () => {
     if (isSerialized) {
       setEntries(prev => prev.map(entry => {
         if (entry.id === id) {
-          const poRemaining = (entry.requestedQty || 0) - (entry.previousReceivedQty || 0);
-          const globalRemaining = (entry.globalRequestedQty || 0) - (entry.globalReceivedQty || 0);
-          const maxAllowed = Math.min(poRemaining, globalRemaining);
+          const poRemaining = Math.max(0, (entry.requestedQty || 0) - (entry.previousReceivedQty || 0));
+          const globalRemaining = Math.max(0, (entry.globalRequestedQty || 0) - (entry.globalReceivedQty || 0));
+          const maxAllowed = Math.max(poRemaining, globalRemaining) > 0 
+            ? Math.min(poRemaining > 0 ? poRemaining : Infinity, globalRemaining > 0 ? globalRemaining : Infinity)
+            : (entry.requestedQty || 9999);
           const finalValue = Math.min(numericValue, maxAllowed);
           return {
             ...entry,
@@ -225,9 +637,11 @@ const SerialNumberEntryPage: React.FC = () => {
     } else {
       setNonSerializedItems(prev => prev.map(item => {
         if (item.id === id) {
-          const poRemaining = (item.requestedQty || 0) - (item.previousReceivedQty || 0);
-          const globalRemaining = (item.globalRequestedQty || 0) - (item.globalReceivedQty || 0);
-          const maxAllowed = Math.min(poRemaining, globalRemaining);
+          const poRemaining = Math.max(0, (item.requestedQty || 0) - (item.previousReceivedQty || 0));
+          const globalRemaining = Math.max(0, (item.globalRequestedQty || 0) - (item.globalReceivedQty || 0));
+          const maxAllowed = Math.max(poRemaining, globalRemaining) > 0 
+            ? Math.min(poRemaining > 0 ? poRemaining : Infinity, globalRemaining > 0 ? globalRemaining : Infinity)
+            : (item.requestedQty || 9999);
           const finalValue = Math.min(numericValue, maxAllowed);
           return { ...item, newDeliveryQty: finalValue };
         }
@@ -646,7 +1060,7 @@ const SerialNumberEntryPage: React.FC = () => {
               </button>
               <button 
                 onClick={handleSubmit}
-                disabled={isSubmitting || totalSerialsEntered < totalSerialsNeeded || [...entries, ...nonSerializedItems].some(item => (item.quantity || item.newDeliveryQty || 0) > (item.requestedQty - item.previousReceivedQty)) || [...entries, ...nonSerializedItems].every(item => (item.quantity || item.newDeliveryQty || 0) === 0)}
+                disabled={isSubmitting || totalSerialsEntered < totalSerialsNeeded || [...entries, ...nonSerializedItems].every(item => (item.quantity || item.newDeliveryQty || 0) === 0)}
                 className={`bg-[#FE4E02] hover:bg-[#E04502] text-white rounded-2xl font-black shadow-xl shadow-[#FE4E02]/30 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 uppercase tracking-widest ${
                   isScrolled ? 'text-xs px-5 py-2' : 'text-sm px-8 py-3.5'
                 }`}
@@ -863,12 +1277,10 @@ const SerialNumberEntryPage: React.FC = () => {
                           <input 
                             type="number"
                             min="0"
-                            max={remaining}
-                            disabled={remaining === 0}
-                            placeholder={remaining === 0 ? "0" : remaining.toString()}
+                            placeholder="0"
                             value={item.newDeliveryQty || ''}
                             onChange={(e) => handleQtyChange(item.id, e.target.value, false)}
-                            className={`w-full h-10 px-4 bg-slate-50/50 dark:bg-slate-800/50 border ${isInvalid ? 'border-red-400' : 'border-slate-100 dark:border-slate-700'} rounded-lg text-sm font-bold text-slate-700 dark:text-white focus:border-[#FE4E02] focus:ring-4 focus:ring-[#FE4E02]/5 outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100/50 dark:disabled:bg-slate-900/50`}
+                            className={`w-full h-10 px-4 bg-slate-50/50 dark:bg-slate-800/50 border ${isInvalid ? 'border-red-400' : 'border-slate-100 dark:border-slate-700'} rounded-lg text-sm font-bold text-slate-700 dark:text-white focus:border-[#FE4E02] focus:ring-4 focus:ring-[#FE4E02]/5 outline-none transition-all`}
                           />
                           <p className="text-[9px] text-gray-400 mt-1 px-1">Enter quantity, then assign serial numbers if required.</p>
                           {isInvalid && <p className="text-red-400 text-[8px] font-bold uppercase tracking-widest mt-1 px-1">Quantity exceeds remaining amount</p>}
@@ -944,12 +1356,10 @@ const SerialNumberEntryPage: React.FC = () => {
                             <input 
                               type="number"
                               min="0"
-                              max={remaining}
-                              disabled={remaining === 0}
-                              placeholder={remaining === 0 ? "0" : remaining.toString()}
+                              placeholder="0"
                               value={entry.quantity || ''}
                               onChange={(e) => handleQtyChange(entry.id, e.target.value, true)}
-                              className={`w-full h-10 px-4 bg-slate-50/50 dark:bg-slate-800/50 border ${isInvalid ? 'border-red-400' : 'border-slate-100 dark:border-slate-700'} rounded-lg text-sm font-bold text-slate-700 dark:text-white focus:border-[#FE4E02] focus:ring-4 focus:ring-[#FE4E02]/5 outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-slate-100/50 dark:disabled:bg-slate-900/50`}
+                              className={`w-full h-10 px-4 bg-slate-50/50 dark:bg-slate-800/50 border ${isInvalid ? 'border-red-400' : 'border-slate-100 dark:border-slate-700'} rounded-lg text-sm font-bold text-slate-700 dark:text-white focus:border-[#FE4E02] focus:ring-4 focus:ring-[#FE4E02]/5 outline-none transition-all`}
                             />
                             <p className="text-[9px] text-gray-400 mt-0.5 px-1">Enter quantity, then assign serial numbers if required.</p>
                             {isInvalid && <p className="text-red-400 text-[8px] font-bold uppercase tracking-widest mt-0.5 px-1">Quantity exceeds remaining amount</p>}
@@ -1031,9 +1441,286 @@ const SerialNumberEntryPage: React.FC = () => {
                 })}
               </div>
             )}
+
+            {/* Received Deliverables & History Section */}
+            {deliveryHistory.length > 0 && (
+              <div className="mt-12 pt-8 border-t border-slate-200 dark:border-slate-800 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                      <History size={20} />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-800 dark:text-white uppercase tracking-tight font-poppins">
+                        Received Deliverables & History
+                      </h2>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 font-medium">
+                        Edit delivered quantities, update serials, or revert received items to restore remaining request balance.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 rounded-full border border-slate-200 dark:border-slate-700 w-fit">
+                    {deliveryHistory.length} {deliveryHistory.length === 1 ? 'Record' : 'Records'}
+                  </span>
+                </div>
+
+                <div className="space-y-3">
+                  {deliveryHistory.map((tx) => (
+                    <div
+                      key={tx.id}
+                      className="p-4 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-black text-slate-800 dark:text-white">
+                            {tx.item_name || tx.item_code}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400 font-bold">
+                            {tx.item_code}
+                          </span>
+                          {tx.isSerialized && (
+                            <span className="px-2 py-0.5 bg-purple-50 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 text-[9px] font-black rounded-md uppercase tracking-wider border border-purple-200 dark:border-purple-800/40">
+                              Serialized
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            Delivered Qty: <strong className="text-blue-600 dark:text-blue-400 font-black">{tx.quantity}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>Location: <strong className="text-slate-700 dark:text-slate-300">{tx.to_location}</strong></span>
+                          <span>•</span>
+                          <span>{new Date(tx.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                          {tx.reason && (
+                            <>
+                              <span>•</span>
+                              <span className="italic text-slate-400 truncate max-w-xs">{tx.reason}</span>
+                            </>
+                          )}
+                        </div>
+
+                        {tx.serials && tx.serials.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Serials:</span>
+                            {tx.serials.map((sn, snIdx) => (
+                              <span key={snIdx} className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-[10px] font-mono text-slate-600 dark:text-slate-300 rounded border border-slate-200 dark:border-slate-700">
+                                {sn}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end md:self-center shrink-0">
+                        <button
+                          onClick={() => setEditingDeliverable({
+                            id: tx.id,
+                            code: tx.item_code,
+                            name: tx.item_name || tx.item_code,
+                            qty: tx.quantity,
+                            originalQty: tx.quantity,
+                            reason: tx.reason || '',
+                            serials: tx.serials ? [...tx.serials] : Array(tx.quantity).fill(''),
+                            to_location: tx.to_location,
+                            created_at: tx.created_at,
+                            isSerialized: tx.isSerialized
+                          })}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer border border-blue-200 dark:border-blue-800/40"
+                          title="Edit deliverable quantity, serials, and notes"
+                        >
+                          <Edit3 size={13} />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteTx(tx)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer border border-red-200 dark:border-red-800/40"
+                          title="Revert this delivery and restore stock and request balance"
+                        >
+                          <RotateCcw size={13} />
+                          <span>Revert</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
+
+      {/* Edit Deliverable Modal */}
+      {editingDeliverable && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 dark:border-slate-800 space-y-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/30 text-blue-500 flex items-center justify-center">
+                  <Edit3 size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800 dark:text-white uppercase tracking-tight">Edit Deliverable</h3>
+                  <p className="text-xs text-slate-400 font-bold">{editingDeliverable.name} ({editingDeliverable.code})</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setEditingDeliverable(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Delivered Quantity</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editingDeliverable.qty}
+                    onChange={(e) => {
+                      const val = Math.max(0, parseInt(e.target.value) || 0);
+                      setEditingDeliverable(prev => {
+                        if (!prev) return null;
+                        const newSerials = [...prev.serials];
+                        while (newSerials.length < val) newSerials.push('');
+                        return {
+                          ...prev,
+                          qty: val,
+                          serials: newSerials.slice(0, val)
+                        };
+                      });
+                    }}
+                    className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-800 dark:text-white focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-[9px] text-slate-400 mt-1">Originally delivered: {editingDeliverable.originalQty}</p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Location</label>
+                  <input
+                    type="text"
+                    disabled
+                    value={editingDeliverable.to_location}
+                    className="w-full h-11 px-4 bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-bold text-slate-500 cursor-not-allowed"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">Remarks / Reference</label>
+                <input
+                  type="text"
+                  value={editingDeliverable.reason}
+                  onChange={(e) => setEditingDeliverable(prev => prev ? ({ ...prev, reason: e.target.value }) : null)}
+                  className="w-full h-11 px-4 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-800 dark:text-white focus:outline-none focus:border-blue-500"
+                  placeholder="Optional delivery remarks..."
+                />
+              </div>
+
+              {editingDeliverable.isSerialized && editingDeliverable.qty > 0 && (
+                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Serial Numbers</label>
+                    <span className="text-[9px] font-bold text-slate-400">
+                      {editingDeliverable.serials.filter(s => s.trim() !== '').length} / {editingDeliverable.qty}
+                    </span>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                    {editingDeliverable.serials.map((sn, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-slate-400 w-8">#{idx + 1}</span>
+                        <input
+                          type="text"
+                          value={sn}
+                          placeholder={`Serial number ${idx + 1}`}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditingDeliverable(prev => {
+                              if (!prev) return null;
+                              const updated = [...prev.serials];
+                              updated[idx] = val;
+                              return { ...prev, serials: updated };
+                            });
+                          }}
+                          className="flex-1 h-9 px-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-mono text-slate-800 dark:text-white focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingDeliverable(null)}
+                disabled={isSavingEdit}
+                className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditDeliverable}
+                disabled={isSavingEdit}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-500/20 transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isSavingEdit ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                <span>Save Deliverable</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revert Confirmation Modal */}
+      {confirmDeleteTx && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 dark:border-slate-800 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 dark:bg-red-900/30 text-red-500 flex items-center justify-center mx-auto">
+              <RotateCcw size={24} />
+            </div>
+            <div className="text-center space-y-2">
+              <h3 className="text-lg font-black text-slate-800 dark:text-white uppercase tracking-tight">Revert Received Delivery?</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                You are about to revert <strong className="text-slate-800 dark:text-white">{confirmDeleteTx.quantity} units</strong> of <strong className="text-slate-800 dark:text-white">{confirmDeleteTx.item_name || confirmDeleteTx.item_code}</strong>.
+              </p>
+              <div className="p-3 bg-red-50/50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/30 rounded-xl text-left text-[11px] text-red-600 dark:text-red-400 space-y-1">
+                <p className="font-bold">This operation will automatically:</p>
+                <ul className="list-disc list-inside space-y-0.5 text-[10px] text-red-500">
+                  <li>Deduct {confirmDeleteTx.quantity} units from inventory location stocks</li>
+                  <li>Restore {confirmDeleteTx.quantity} units to remaining deliverable quantity</li>
+                  <li>Remove associated serial numbers and delivery record</li>
+                  <li>Recalculate request completion status and percentages</li>
+                </ul>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-3">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteTx(null)}
+                disabled={isReverting}
+                className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRevertDelivery}
+                disabled={isReverting}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white shadow-lg shadow-red-500/20 transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isReverting ? <Loader2 size={16} className="animate-spin" /> : <RotateCcw size={16} />}
+                <span>Revert Delivery</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer Info */}
       <footer className="p-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800 text-center">

@@ -2,5 +2,5 @@
   "name": "Aralinks Inventory 7/06 (Updated)",
   "description": "A comprehensive cloud-based inventory management system for Aralinks, featuring automated equipment tracking, bundle management, and multi-location logistics.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

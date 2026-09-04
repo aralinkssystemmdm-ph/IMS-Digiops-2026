@@ -57,6 +57,20 @@ type StatusFilterType = 'All' | 'Pending' | 'Partially' | 'Completed' | 'Cancell
 type ProgramFilterType = 'All' | 'NGS' | 'HUB' | 'TNL' | 'ACE' | 'NGS+ACE' | 'HUB+ACE' | 'PELS NGS' | 'PELS NGS+ACE' | 'ACE+PELS' | 'ABDL' | 'ACE+ABDL' | 'HUB+NGS' | 'ABDL (PELS)';
 type DateFilterType = 'All' | 'Today' | 'This Week' | 'This Month' | 'Custom';
 
+export const calculateCompletionPercentage = (items?: Array<{ qty?: any; received_quantity?: any }>): number => {
+  if (!items || items.length === 0) return 0;
+  const total = items.reduce((sum, item) => sum + (parseInt(item.qty) || 0), 0);
+  const delivered = items.reduce((sum, item) => sum + (parseInt(item.received_quantity) || 0), 0);
+  if (total <= 0) return 0;
+  if (delivered <= 0) return 0;
+  if (delivered >= total) return 100;
+  const rawPct = (delivered / total) * 100;
+  const rounded = Math.round(rawPct);
+  if (rounded >= 100) return 99; // Never display 100% if items are still pending
+  if (rounded === 0 && delivered > 0) return 1; // Always indicate delivery progress if items received
+  return rounded;
+};
+
 interface RequestDetailsSidebarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -65,6 +79,7 @@ interface RequestDetailsSidebarProps {
   onNavigate?: (viewId: string, params?: any) => void;
   onOpenPrint: () => void;
   onUpdateDelivery: () => void;
+  onRefresh?: () => void;
   onCancelRequest?: (req: RequestData) => void;
   onUndoCancelRequest?: (req: RequestData) => void;
   userRole?: string | null;
@@ -79,6 +94,7 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
   onNavigate,
   onOpenPrint,
   onUpdateDelivery,
+  onRefresh,
   onCancelRequest,
   onUndoCancelRequest,
   userRole = 'Staff',
@@ -229,10 +245,10 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
         await supabase.from('item_requests').update({ status: newStatus }).eq('control_no', request.id);
       }
 
-      // Re-trigger global fetch
-      onUpdateDelivery(); // This usually triggers a refresh via VerificationModal's onConfirm approach?
-      // Actually onUpdateDelivery opens the modal. We just want to refresh data.
-      // So let's use the onNavigate or similar if available, or just rely on realtime.
+      // Re-trigger global fetch to refresh data cleanly
+      if (onRefresh) {
+        onRefresh();
+      }
       
     } catch (err) {
       console.error('Failed to recalculate:', err);
@@ -536,7 +552,7 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
               <div className="flex flex-col">
                 <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-1 leading-none">Comp. %</span>
                 <span className={`text-lg font-black leading-none ${deliveredItemsCount === totalItemsCount && totalItemsCount > 0 ? 'text-emerald-500' : 'text-[#2563EB]'}`}>
-                  {totalItemsCount > 0 ? Math.round((deliveredItemsCount / totalItemsCount) * 100) : 0}%
+                  {calculateCompletionPercentage(request.items)}%
                 </span>
               </div>
               <div className="w-8 h-8 rounded-full bg-slate-50 dark:bg-slate-900/40 flex items-center justify-center shrink-0 text-slate-400">
@@ -614,7 +630,9 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
 
           <div className="space-y-4">
             {poBreakdown.map((po, index) => {
-              const deliveryPercentage = po.totalReq > 0 ? Math.round((po.totalDel / po.totalReq) * 100) : 0;
+              const deliveryPercentage = po.totalReq > 0
+                ? (po.totalDel >= po.totalReq ? 100 : (po.totalDel <= 0 ? 0 : Math.min(99, Math.round((po.totalDel / po.totalReq) * 100))))
+                : 0;
               const isVisible = visiblePoBreakdown[index] || false;
 
               return (
@@ -630,33 +648,35 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                     </div>
                     
                     <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
-                      {!po.isDelivered && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const hasItems = po.items && po.items.length > 0;
-                            const poItemsMap: Record<string, number> = {};
-                            if (hasItems) {
-                              po.items.forEach((it: any) => {
-                                poItemsMap[it.code || it.item_code] = it.requested;
-                              });
-                            }
-                            
-                            navigate(`/requests/${request.id}/serial-entry`, { 
-                              state: { 
-                                selectedPO: po.poNum || null,
-                                poItems: Object.keys(poItemsMap).length > 0 ? poItemsMap : null
-                              } 
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const hasItems = po.items && po.items.length > 0;
+                          const poItemsMap: Record<string, number> = {};
+                          if (hasItems) {
+                            po.items.forEach((it: any) => {
+                              poItemsMap[it.code || it.item_code] = it.requested;
                             });
-                            onClose();
-                          }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all text-[10px] font-black uppercase tracking-widest shadow-sm"
-                          title="Process Deliverables for this PO"
-                        >
-                          <Edit3 size={12} />
-                          <span>Process</span>
-                        </button>
-                      )}
+                          }
+                          
+                          navigate(`/requests/${request.id}/serial-entry`, { 
+                            state: { 
+                              selectedPO: po.poNum || null,
+                              poItems: Object.keys(poItemsMap).length > 0 ? poItemsMap : null
+                            } 
+                          });
+                          onClose();
+                        }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black uppercase tracking-widest shadow-sm ${
+                          po.isDelivered
+                            ? 'bg-blue-500/10 text-blue-600 hover:bg-blue-500 hover:text-white'
+                            : 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white'
+                        }`}
+                        title={po.isDelivered ? "View / Edit Deliverables for this PO" : "Process Deliverables for this PO"}
+                      >
+                        <Edit3 size={12} />
+                        <span>{po.isDelivered ? 'Edit' : 'Process'}</span>
+                      </button>
                       
                       <div 
                         className="flex items-center gap-4 cursor-pointer"
@@ -769,14 +789,29 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                            {/* PO Specific History Section */}
                            {po.history && po.history.length > 0 && (
                              <div className="mt-6 border-t border-slate-100 dark:border-slate-800 pt-4">
-                               <button 
-                                 onClick={() => setVisiblePoHistory(prev => ({ ...prev, [po.poNum]: !prev[po.poNum] }))}
-                                 className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3 hover:text-blue-500 transition-colors"
-                               >
-                                 <History size={12} />
-                                 Delivery Records
-                                 <ChevronDown size={12} className={`transition-transform duration-200 ${visiblePoHistory[po.poNum] ? 'rotate-180' : ''}`} />
-                               </button>
+                               <div className="flex items-center justify-between mb-3">
+                                 <button 
+                                   onClick={() => setVisiblePoHistory(prev => ({ ...prev, [po.poNum]: !prev[po.poNum] }))}
+                                   className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest hover:text-blue-500 transition-colors cursor-pointer"
+                                 >
+                                   <History size={12} />
+                                   Delivery Records
+                                   <ChevronDown size={12} className={`transition-transform duration-200 ${visiblePoHistory[po.poNum] ? 'rotate-180' : ''}`} />
+                                 </button>
+                                 {userRole !== 'Staff' && (
+                                   <button
+                                     onClick={(e) => {
+                                       e.stopPropagation();
+                                       onUpdateDelivery();
+                                     }}
+                                     className="flex items-center gap-1 text-[9px] font-black uppercase tracking-wider text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 px-2 py-0.5 rounded-md transition-colors cursor-pointer border border-blue-200 dark:border-blue-800/50"
+                                     title="Edit Deliverables & Revert Received Items"
+                                   >
+                                     <Edit3 size={10} />
+                                     <span>Edit / Revert</span>
+                                   </button>
+                                 )}
+                                </div>
 
                                <AnimatePresence>
                                  {visiblePoHistory[po.poNum] && (
@@ -803,6 +838,9 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                                                 <tr className="border-b border-slate-50 dark:border-slate-800">
                                                   <th className="text-left py-1 text-[8px] font-black text-slate-300 uppercase tracking-widest">Item Description</th>
                                                   <th className="text-right py-1 text-[8px] font-black text-slate-300 uppercase tracking-widest">Qty Del.</th>
+                                                  {userRole !== 'Staff' && (
+                                                    <th className="text-right py-1 text-[8px] font-black text-slate-300 uppercase tracking-widest w-12">Action</th>
+                                                  )}
                                                 </tr>
                                               </thead>
                                               <tbody className="divide-y divide-slate-50/50 dark:divide-slate-800/50">
@@ -814,6 +852,20 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                                                     <td className="py-1.5 text-right">
                                                       <span className="text-[10px] font-black text-blue-500">{it.qty}</span>
                                                     </td>
+                                                    {userRole !== 'Staff' && (
+                                                      <td className="py-1.5 text-right">
+                                                        <button
+                                                          onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onUpdateDelivery();
+                                                          }}
+                                                          className="inline-flex items-center text-slate-400 hover:text-blue-500 p-0.5 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                                                          title="Edit Deliverable / Revert Received Item"
+                                                        >
+                                                          <Edit3 size={11} />
+                                                        </button>
+                                                      </td>
+                                                    )}
                                                   </tr>
                                                 ))}
                                               </tbody>
@@ -1087,9 +1139,9 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           
           if (req.status === 'Cancelled') {
             status = 'Cancelled';
-          } else if (req.status === 'Delivered' || req.status === 'Partially Delivered') {
+          } else if (req.status === 'Delivered' || req.status === 'Partially Delivered' || req.status === 'Pending') {
             status = req.status;
-          } else if (req.status === 'Complete' || req.delivered_at) {
+          } else if (req.status === 'Complete') {
             status = 'Delivered';
           }
           
@@ -1125,6 +1177,8 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
           } as RequestData;
         });
         setRequests(mapped);
+        setSelectedDetailsRequest(prev => prev ? (mapped.find(r => r.id === prev.id) || prev) : null);
+        setVerificationRequest(prev => prev ? (mapped.find(r => r.id === prev.id) || prev) : null);
       }
     } catch (err) {
       console.error('Failed to fetch requests:', err);
@@ -1345,7 +1399,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
     
     const totalItemsCount = req.items?.reduce((sum, item) => sum + (parseInt(item.qty) || 0), 0) || 0;
     const deliveredItemsCount = req.items?.reduce((sum, item) => sum + (parseInt(item.received_quantity) || 0), 0) || 0;
-    const percentage = totalItemsCount > 0 ? Math.round((deliveredItemsCount / totalItemsCount) * 100) : 0;
+    const percentage = calculateCompletionPercentage(req.items);
 
     const renderPODisplay = (poString: string | null | undefined) => {
       if (!poString) return null;
@@ -1592,11 +1646,20 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
             ) : isDelivered ? (
               <div className="flex items-center gap-1">
                 <button 
+                  onClick={() => req.poNumber && handleCheckItems(req)}
+                  disabled={isCompleting || !req.poNumber}
+                  className="p-2 rounded-md transition-all active:scale-95 text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer"
+                  title="View & Edit Deliverables / Revert Received Items"
+                >
+                  <Box size={18} />
+                </button>
+                <button 
                   onClick={() => { setVerificationRequest(req); setIsVerificationModalOpen(true); }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] cursor-pointer text-xs font-bold transition-all"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-[#EFF6FF] cursor-pointer text-xs font-bold transition-all"
+                  title="View Delivery History & Records"
                 >
                   <History size={14} />
-                  <span>View History</span>
+                  <span>History</span>
                 </button>
               </div>
             ) : (
@@ -1646,31 +1709,31 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
                         <Plus size={20} />
                       </button>
 
-                      {/* Deliverables processing icon - Active when PO exists and completion < 100% */}
-                      {!isDelivered && (
-                        <button 
-                          onClick={() => req.poNumber && percentage < 100 && handleCheckItems(req)}
-                          disabled={isCompleting || !req.poNumber || percentage === 100}
-                          className={`p-2 rounded-md transition-all active:scale-95 ${
-                            (!req.poNumber || percentage === 100) 
-                              ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
+                      {/* Deliverables processing icon - Active when PO exists, editable even when completed (100%) */}
+                      <button 
+                        onClick={() => req.poNumber && handleCheckItems(req)}
+                        disabled={isCompleting || !req.poNumber}
+                        className={`p-2 rounded-md transition-all active:scale-95 ${
+                          !req.poNumber 
+                            ? 'text-gray-300 dark:text-slate-700 cursor-not-allowed opacity-50' 
+                            : (isDelivered || (deliveredItemsCount >= totalItemsCount && totalItemsCount > 0))
+                              ? 'text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer'
                               : isPartial 
                                 ? 'text-amber-500 hover:bg-amber-100/50 dark:hover:bg-amber-500/20 cursor-pointer' 
                                 : 'text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 cursor-pointer'
-                          }`}
-                          title={!req.poNumber 
-                            ? 'Assign PO number first to process deliverables' 
-                            : percentage === 100
-                              ? 'Deliverables 100% complete'
-                              : isPartial ? 'Continue Processing Deliverables' : 'Start Processing Deliverables'}
-                        >
-                          {isCompleting ? (
-                            <Loader2 size={18} className="animate-spin" />
-                          ) : (
-                            <Box size={18} className={req.poNumber && percentage < 100 ? "group-hover:scale-110 transition-transform" : ""} />
-                          )}
-                        </button>
-                      )}
+                        }`}
+                        title={!req.poNumber 
+                          ? 'Assign PO number first to process deliverables' 
+                          : (isDelivered || (deliveredItemsCount >= totalItemsCount && totalItemsCount > 0))
+                            ? 'View & Edit Deliverables (100% Complete)'
+                            : isPartial ? 'Continue Processing Deliverables' : 'Start Processing Deliverables'}
+                      >
+                        {isCompleting ? (
+                          <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                          <Box size={18} className={req.poNumber ? "group-hover:scale-110 transition-transform" : ""} />
+                        )}
+                      </button>
                     </>
                   );
                 })()}
@@ -2337,7 +2400,7 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               console.log(`[PO Revert] Reverting tx ${tx.id} for item ${tx.item_code} (Qty: ${tx.quantity})`);
               
               // a. Update Inventory
-              const loc = tx.to_location || tx.location;
+              const loc = tx.to_location || tx.location || poModalRequest.location || 'IT Basement';
               const { data: stocks } = await supabase
                 .from('item_location_stocks')
                 .select('*')
@@ -2976,6 +3039,9 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               onUpdateDelivery={() => {
                 setVerificationRequest(selectedDetailsRequest);
                 setIsVerificationModalOpen(true);
+              }}
+              onRefresh={() => {
+                fetchRequests(false);
               }}
               onCancelRequest={(req) => {
                 setRequestToCancel(req);

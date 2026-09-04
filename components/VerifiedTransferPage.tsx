@@ -102,6 +102,7 @@ const VerifiedTransferPage: React.FC<VerifiedTransferPageProps> = ({
   const [toLocation, setToLocation] = useState<string>('');
   const [remarks, setRemarks] = useState<string>('');
   const [transferBy, setTransferBy] = useState<string>('');
+  const [selectedTeam, setSelectedTeam] = useState<'Aralinks' | 'Protrack' | null>(null);
   
   // DROPDOWN STATES
   const [isFromDropdownOpen, setIsFromDropdownOpen] = useState(false);
@@ -697,6 +698,11 @@ const VerifiedTransferPage: React.FC<VerifiedTransferPageProps> = ({
       return;
     }
 
+    if (!selectedTeam) {
+      setError('Please select a team (Aralinks or Protrack).');
+      return;
+    }
+
     const validItems = items.filter(i => {
       const totalQty = (Object.values(i.conditions) as string[]).reduce((sum, v) => sum + (parseInt(v) || 0), 0);
       return i.item_code && i.from_location && totalQty > 0;
@@ -854,7 +860,8 @@ const VerifiedTransferPage: React.FC<VerifiedTransferPageProps> = ({
           transaction_type: 'Transfer',
           reference_id: reqNo,
           created_by: transferBy,
-          reason: remarks || 'Stock Transfer'
+          reason: remarks || 'Stock Transfer',
+          team: selectedTeam ? selectedTeam.toLowerCase() : null
         }]);
       }
 
@@ -879,7 +886,8 @@ const VerifiedTransferPage: React.FC<VerifiedTransferPageProps> = ({
           to_location: toLocation,
           transferred_by: transferBy,
           items: itemsSnapshot,
-          program: 'General'
+          program: 'General',
+          team: selectedTeam ? selectedTeam.toLowerCase() : null
         }]);
       } catch (historyErr) {
         console.error('Error logging to transfer history:', historyErr);
@@ -1057,6 +1065,40 @@ const VerifiedTransferPage: React.FC<VerifiedTransferPageProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* ROW 3: ASSIGNED TEAM */}
+                <div className="md:col-span-4 mt-2">
+                  <div className="flex items-center gap-2 ml-1 mb-1">
+                    <User size={12} className="text-brand-orange" strokeWidth={2.5} />
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-[0.25em]">Assigned Team <span className="text-red-500">*</span></label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTeam('Aralinks')}
+                      className={`p-3 rounded-xl border-2 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                        selectedTeam === 'Aralinks' 
+                          ? 'bg-blue-500/10 border-blue-500 text-blue-600 dark:text-blue-400' 
+                          : (isDarkMode ? 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-blue-500/50' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-blue-500/30')
+                      }`}
+                    >
+                      <div className={`w-3 h-3 rounded-full border-2 ${selectedTeam === 'Aralinks' ? 'border-blue-500 bg-blue-500' : 'border-slate-300 dark:border-slate-600'}`} />
+                      Aralinks
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTeam('Protrack')}
+                      className={`p-3 rounded-xl border-2 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
+                        selectedTeam === 'Protrack' 
+                          ? 'bg-purple-500/10 border-purple-500 text-purple-600 dark:text-purple-400' 
+                          : (isDarkMode ? 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-purple-500/50' : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-purple-500/30')
+                      }`}
+                    >
+                      <div className={`w-3 h-3 rounded-full border-2 ${selectedTeam === 'Protrack' ? 'border-purple-500 bg-purple-500' : 'border-slate-300 dark:border-slate-600'}`} />
+                      Protrack
+                    </button>
+                  </div>
                 </div>
 
                 </div>
