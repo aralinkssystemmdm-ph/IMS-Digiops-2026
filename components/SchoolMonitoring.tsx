@@ -837,20 +837,35 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 ? JSON.parse(row.status_dates) 
                 : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
               
-              const program = row.program || '';
+              const matchedLocal = localRecords.find(l => 
+                (l.school_monitoring_id && row.school_monitoring_id && l.school_monitoring_id === row.school_monitoring_id) ||
+                l.id === row.id ||
+                l.customer_code === row.customer_code
+              );
+
+              const rawCustomerCode = row.customer_code || '';
+              const cleanCustomerCode = rawCustomerCode.includes('__') 
+                ? rawCustomerCode.split('__')[0] 
+                : (rawCustomerCode || matchedLocal?.customer_code || '');
+
+              const program = row.program !== undefined && row.program !== null && row.program !== '' && row.program !== 'OTHER'
+                ? row.program
+                : (matchedLocal?.program || row.program || '');
+
+              const team = row.team || matchedLocal?.team || (row.school_monitoring_id?.startsWith('SMS-') || row.school_monitoring_id?.startsWith('PIT-') ? 'Protrack' : 'Aralinks');
 
               return {
                 id: row.id,
-                customer_code: row.customer_code,
+                customer_code: cleanCustomerCode,
                 school_name: row.school_name,
                 program: program,
                 sales_team: row.sales_team,
-                team: row.team || '',
+                team: team,
                 class_opening: row.class_opening,
                 target_deployment_date: row.target_deployment_date,
                 status: Number(row.status) || 1,
                 status_dates: status_dates,
-                items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
+                items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || matchedLocal?.items || []),
                 school_monitoring_id: row.school_monitoring_id || '',
                 type_of_document: row.type_of_document || ''
               };
@@ -1068,8 +1083,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           try {
             const isUUID = (str: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
             for (const rec of monitoringData) {
+              const isRecUUID = rec.id && isUUID(rec.id);
               const payload = {
-                id: (rec.id && isUUID(rec.id)) ? rec.id : undefined,
+                id: isRecUUID ? rec.id : undefined,
                 customer_code: rec.customer_code,
                 school_name: rec.school_name,
                 program: rec.program || null,
@@ -1084,10 +1100,28 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 type_of_document: rec.type_of_document || null,
                 updated_at: new Date().toISOString()
               };
-              supabase
-                .from('school_monitoring')
-                .upsert(payload, { onConflict: 'customer_code' })
-                .then();
+
+              if (isRecUUID) {
+                supabase
+                  .from('school_monitoring')
+                  .upsert(payload, { onConflict: 'id' })
+                  .then((res) => {
+                    if (res.error) {
+                      let retryPayload = { ...payload };
+                      if (res.error.code === '23514' || res.error.message?.includes('school_monitoring_program_check')) {
+                        retryPayload.program = null;
+                      }
+                      if (res.error.code === '23505' || res.error.message?.includes('school_monitoring_customer_code_key')) {
+                        const suffix = rec.school_monitoring_id ? `__${rec.school_monitoring_id}` : `__${Date.now()}`;
+                        retryPayload.customer_code = `${rec.customer_code || 'CUST'}${suffix}`;
+                      }
+                      supabase
+                        .from('school_monitoring')
+                        .upsert(retryPayload, { onConflict: 'id' })
+                        .then();
+                    }
+                  });
+              }
             }
           } catch (err) {
             console.warn('Background db sync fail:', err);
@@ -1136,10 +1170,14 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         const recordsToUpsert = singleRecordToUpsert ? [singleRecordToUpsert] : newRecords;
 
         for (const rec of recordsToUpsert) {
+          const cleanProgram = (rec.program && typeof rec.program === 'string' && rec.program.trim()) 
+            ? rec.program.trim() 
+            : null;
+
           const payload: any = {
             customer_code: rec.customer_code,
             school_name: rec.school_name,
-            program: rec.program || null,
+            program: cleanProgram,
             sales_team: rec.sales_team,
             class_opening: rec.class_opening || null,
             target_deployment_date: rec.target_deployment_date || null,
@@ -1158,7 +1196,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
             payload.id = rec.id;
             response = await supabase
               .from('school_monitoring')
-              .upsert(payload, { onConflict: 'customer_code' })
+              .upsert(payload, { onConflict: 'id' })
               .select();
           } else {
             // Creation mode (POST method equivalent)
@@ -1169,37 +1207,91 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               .select();
           }
           
-          const { data, error } = response;
+          let finalData = response.data;
+          let finalError = response.error;
 
-          if (error) {
-            console.error('Supabase row persist error:', error);
-            throw new Error(error.message || 'Failed to save record to database');
+          // If check constraint violation on program, fallback to null since program is nullable
+          if (finalError && (
+            finalError.code === '23514' || 
+            (finalError.message && finalError.message.includes('school_monitoring_program_check'))
+          )) {
+            console.warn('school_monitoring_program_check constraint triggered. Retrying with null program fallback (nullable column)...');
+            payload.program = null;
+            if (isRecUUID) {
+              response = await supabase
+                .from('school_monitoring')
+                .upsert(payload, { onConflict: 'id' })
+                .select();
+            } else {
+              response = await supabase
+                .from('school_monitoring')
+                .insert(payload)
+                .select();
+            }
+            finalData = response.data;
+            finalError = response.error;
           }
 
-          if (data && data[0]) {
-            const dbRow = data[0];
+          // If unique constraint violation on customer_code (e.g. legacy remote DB unique constraint 'school_monitoring_customer_code_key')
+          if (finalError && (
+            finalError.code === '23505' ||
+            (finalError.message && finalError.message.includes('school_monitoring_customer_code_key'))
+          )) {
+            console.warn('school_monitoring_customer_code_key constraint triggered. Retrying with unique discriminant suffix...');
+            const suffix = rec.school_monitoring_id ? `__${rec.school_monitoring_id}` : `__${Date.now()}`;
+            payload.customer_code = `${rec.customer_code || 'CUST'}${suffix}`;
+            if (isRecUUID) {
+              response = await supabase
+                .from('school_monitoring')
+                .upsert(payload, { onConflict: 'id' })
+                .select();
+            } else {
+              response = await supabase
+                .from('school_monitoring')
+                .insert(payload)
+                .select();
+            }
+            finalData = response.data;
+            finalError = response.error;
+          }
+
+          if (finalError) {
+            console.error('Supabase row persist error:', finalError);
+            throw new Error(finalError.message || 'Failed to save record to database');
+          }
+
+          if (finalData && finalData[0]) {
+            const dbRow = finalData[0];
             const parsedStatusDates = typeof dbRow.status_dates === 'string' 
               ? JSON.parse(dbRow.status_dates) 
               : (dbRow.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
 
+            const rawDbCustCode = dbRow.customer_code || '';
+            const cleanCustCode = rawDbCustCode.includes('__') 
+              ? rawDbCustCode.split('__')[0] 
+              : (rawDbCustCode || rec.customer_code || '');
+
             const syncedRec = {
               id: dbRow.id,
-              customer_code: dbRow.customer_code,
+              customer_code: cleanCustCode,
               school_name: dbRow.school_name,
-              program: dbRow.program || '',
+              program: dbRow.program || rec.program || '',
               sales_team: dbRow.sales_team,
+              team: rec.team || (dbRow.school_monitoring_id?.startsWith('SMS-') || dbRow.school_monitoring_id?.startsWith('PIT-') ? 'Protrack' : 'Aralinks'),
               class_opening: dbRow.class_opening,
               target_deployment_date: dbRow.target_deployment_date,
               status: Number(dbRow.status) || 1,
               status_dates: parsedStatusDates,
-              items: typeof dbRow.items === 'string' ? JSON.parse(dbRow.items) : (dbRow.items || []),
+              items: typeof dbRow.items === 'string' ? JSON.parse(dbRow.items) : (dbRow.items || rec.items || []),
               school_monitoring_id: dbRow.school_monitoring_id || '',
               type_of_document: dbRow.type_of_document || ''
             };
             
             // Update this record in updatedLocalRecords
             updatedLocalRecords = updatedLocalRecords.map(r => 
-              r.customer_code === syncedRec.customer_code ? syncedRec : r
+              (r.id === syncedRec.id || r.id === rec.id || (r.school_monitoring_id && syncedRec.school_monitoring_id && r.school_monitoring_id === syncedRec.school_monitoring_id)) 
+                ? syncedRec 
+                : r
             );
           }
         }
@@ -1318,7 +1410,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const generateSchoolMonitoringId = (existingRecords: SchoolMonitoringRecord[], selectedTeam?: string) => {
     const currentYear = new Date().getFullYear();
     const isProtrack = (selectedTeam || '').trim().toLowerCase() === 'protrack';
-    const prefix = isProtrack ? 'PIT-IMS' : 'ARAL-IMS';
+    const prefix = isProtrack ? 'SMS' : 'ARAL-IMS';
     let maxNum = 0;
     const existingIdSet = new Set<string>();
 
@@ -1327,7 +1419,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         const cleanId = r.school_monitoring_id.trim().toUpperCase();
         existingIdSet.add(cleanId);
 
-        if (cleanId.startsWith(prefix)) {
+        const matchesPrefix = isProtrack 
+          ? (cleanId.startsWith('SMS-') || cleanId.startsWith('PIT-IMS-') || cleanId.startsWith('PIT-'))
+          : cleanId.startsWith('ARAL-IMS-');
+
+        if (matchesPrefix) {
           const match = cleanId.match(/(\d+)$/);
           if (match) {
             const num = parseInt(match[1], 10);
@@ -1417,12 +1513,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
           if (isUUID) {
             await supabase.from('school_monitoring').delete().eq('id', id);
-          }
-          if (recordToDelete.school_monitoring_id) {
+          } else if (recordToDelete.school_monitoring_id) {
             await supabase.from('school_monitoring').delete().eq('school_monitoring_id', recordToDelete.school_monitoring_id);
-          }
-          if (recordToDelete.customer_code) {
-            await supabase.from('school_monitoring').delete().eq('customer_code', recordToDelete.customer_code);
           }
         } catch (err) {
           console.warn('Failed to delete from Supabase:', err);
@@ -1524,7 +1616,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           if (dbConflicts && dbConflicts.length > 0) {
             const isSelf = editingRecord && dbConflicts.some(row => 
               row.id === editingRecord.id || 
-              (editingRecord.customer_code && row.customer_code === editingRecord.customer_code)
+              (editingRecord.school_monitoring_id && row.school_monitoring_id === editingRecord.school_monitoring_id)
             );
 
             if (!isSelf) {
@@ -2950,7 +3042,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                       <div className="relative">
                         <input
                           type="text"
-                          placeholder={team?.toLowerCase() === 'protrack' ? 'e.g. PIT-IMS-2026-0001' : 'e.g. ARAL-IMS-2026-0001'}
+                          placeholder={team?.toLowerCase() === 'protrack' ? 'e.g. SMS-2026-0001' : 'e.g. ARAL-IMS-2026-0001'}
                           value={schoolMonitoringId}
                           onChange={(e) => setSchoolMonitoringId(e.target.value.toUpperCase())}
                           className={`w-full border p-2 text-sm font-mono font-bold rounded-lg focus:outline-none transition-all ${

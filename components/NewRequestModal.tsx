@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { X, ChevronDown, CheckCircle2, FileText, Check, Plus, Trash2, Paperclip, Upload, AlertCircle, Sparkles, Box, Loader2, Calendar, MapPin, Notebook, Zap, ShieldCheck, Tag, Search, Layers } from 'lucide-react';
+import { X, ChevronDown, CheckCircle2, FileText, Check, Plus, Trash2, Paperclip, Upload, AlertCircle, Sparkles, Box, Loader2, Calendar, MapPin, Notebook, Zap, ShieldCheck, Tag, Search, Layers, RefreshCw } from 'lucide-react';
 import { toTitleCase, getBundleColor, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import { RequestData } from './ItemsRequest';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -189,23 +189,27 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
           .from('school_monitoring')
           .select('*');
         if (!error && data) {
-          const dbRecords = data.map((row: any) => ({
-            id: row.id,
-            customer_code: row.customer_code,
-            school_name: row.school_name,
-            program: row.program || 'OTHER',
-            sales_team: row.sales_team,
-            class_opening: row.class_opening,
-            target_deployment_date: row.target_deployment_date,
-            status: Number(row.status) || 1,
-            status_dates: typeof row.status_dates === 'string' 
-              ? JSON.parse(row.status_dates) 
-              : (row.status_dates || {}),
-            items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
-            school_monitoring_id: row.school_monitoring_id || '',
-            type_of_document: row.type_of_document || '',
-            team: row.team || 'Aralinks'
-          }));
+          const dbRecords = data.map((row: any) => {
+            const rawCustCode = row.customer_code || '';
+            const cleanCustCode = rawCustCode.includes('__') ? rawCustCode.split('__')[0] : rawCustCode;
+            return {
+              id: row.id,
+              customer_code: cleanCustCode,
+              school_name: row.school_name,
+              program: row.program || '',
+              sales_team: row.sales_team,
+              class_opening: row.class_opening,
+              target_deployment_date: row.target_deployment_date,
+              status: Number(row.status) || 1,
+              status_dates: typeof row.status_dates === 'string' 
+                ? JSON.parse(row.status_dates) 
+                : (row.status_dates || {}),
+              items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
+              school_monitoring_id: row.school_monitoring_id || '',
+              type_of_document: row.type_of_document || '',
+              team: row.team || 'Aralinks'
+            };
+          });
 
           monitoringData = dbRecords;
           localStorage.setItem('aralinks_school_monitoring', JSON.stringify(dbRecords));
@@ -585,7 +589,47 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
     }
   }, [isOpen, initialData, fetchMonitoringRecords, fetchSchoolsList, fetchEquipment, prefillItem, prefillCode, fetchNextControlNo]);
 
-  if (!isOpen) return null;
+  // Helper to retrieve and map all items from school monitoring for selected schools
+  const getItemsForSchools = useCallback((schoolNames: string[]): RequestedItem[] => {
+    const itemsResult: RequestedItem[] = [];
+    
+    schoolNames.forEach(schoolName => {
+      const matchingRec = monitoringRecords.find(r => 
+        (r.school_name || '').trim().toLowerCase() === schoolName.trim().toLowerCase()
+      );
+      if (matchingRec && matchingRec.items && Array.isArray(matchingRec.items)) {
+        matchingRec.items.forEach((item: any) => {
+          const equip = equipmentList.find(e => e.item_code === item.item_code);
+          const uom = (equip && equip.uom) ? equip.uom : (item.uom || 'UNIT');
+          const is_serialized = equip ? equip.is_serialized : (item.is_serialized || false);
+          const itemName = item.item_name || item.description || (equip ? equip.description : item.item_code);
+          const qty = parseInt(item.quantity || item.qty || 1) || 1;
+
+          const existingIdx = itemsResult.findIndex(ni => 
+            ni.item_code === item.item_code && 
+            (ni.bundle_name || '') === (item.bundle_name || '')
+          );
+
+          if (existingIdx > -1) {
+            const curQty = parseInt(itemsResult[existingIdx].qty) || 0;
+            itemsResult[existingIdx].qty = String(curQty + qty);
+          } else {
+            itemsResult.push({
+              id: Math.random().toString(36).substr(2, 9),
+              qty: String(qty),
+              uom: uom,
+              item: itemName,
+              item_code: item.item_code || '',
+              is_serialized: is_serialized,
+              bundle_name: item.bundle_name || undefined
+            });
+          }
+        });
+      }
+    });
+
+    return itemsResult;
+  }, [monitoringRecords, equipmentList]);
 
   const handleSchoolToggle = (schoolName: string) => {
     const isSelected = selectedSchools.includes(schoolName);
@@ -600,11 +644,10 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
     setSelectedSchools(newSelected);
 
     if (!isSelected) {
-      if (schoolType === 'existing') {
-        return;
-      }
-      // 1. Auto-populate Program & Team
-      const matchingRec = monitoringRecords.find(r => r.school_name === schoolName);
+      // 1. Auto-populate Program & Team from monitoring record
+      const matchingRec = monitoringRecords.find(r => 
+        (r.school_name || '').trim().toLowerCase() === schoolName.trim().toLowerCase()
+      );
       if (matchingRec) {
         if (matchingRec.program) {
           setProgram(matchingRec.program);
@@ -614,42 +657,21 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
           setTeam(t);
           setRequestType(t === 'Protrack' ? 'SMS-PROTRACK' : 'ARALINKS');
         }
-        
-        // 2. Auto-populate Item List based on monitoring record hardware list
-        // Skip automation if hardware is a bundle for this school's program
-        const matchedProg = (matchingRec.program || '').trim();
-        const hasBundles = matchedProg && (
-          (allProgramBundles[matchedProg] && allProgramBundles[matchedProg].length > 0) ||
-          matchedProg.toUpperCase().includes('ACE')
-        );
+      }
 
-        if (hasBundles) {
-          console.log('Skipping automated item list population as this program has bundles.');
-        } else if (matchingRec.items && Array.isArray(matchingRec.items) && matchingRec.items.length > 0) {
-          const nextItems = [...requestedItems];
-          matchingRec.items.forEach((item: any) => {
-            // Check if already in the requestedItems list
-            const existingIdx = nextItems.findIndex(ni => ni.item_code === item.item_code);
-            const equip = equipmentList.find(e => e.item_code === item.item_code);
-            const uom = equip && equip.uom ? equip.uom : 'UNIT';
-            const is_serialized = equip ? equip.is_serialized : false;
-
-            if (existingIdx > -1) {
-              const currentQty = parseInt(nextItems[existingIdx].qty) || 0;
-              nextItems[existingIdx].qty = String(currentQty + Number(item.quantity || 1));
-            } else {
-              nextItems.push({
-                id: Math.random().toString(36).substr(2, 9),
-                qty: String(item.quantity || 1),
-                uom: uom,
-                item: item.item_name || (equip ? equip.description : item.item_code),
-                item_code: item.item_code,
-                is_serialized: is_serialized
-              });
-            }
-          });
-          setRequestedItems(nextItems);
-        }
+      // 2. Auto-populate all items based on School Monitoring item list
+      const autoPopulatedItems = getItemsForSchools(newSelected);
+      if (autoPopulatedItems.length > 0) {
+        setRequestedItems(autoPopulatedItems);
+        showSuccess('Items Populated', `Auto-populated ${autoPopulatedItems.length} item line(s) from School Monitoring.`);
+      }
+    } else {
+      // If deselected
+      if (newSelected.length === 0) {
+        setRequestedItems([]);
+      } else {
+        const remainingItems = getItemsForSchools(newSelected);
+        setRequestedItems(remainingItems);
       }
     }
   };
@@ -1112,6 +1134,8 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
   const selectedSchoolData = (schoolType === 'new' ? schools : schoolsList).find(s => s.name === firstSelectedSchool);
   const isSelectedSchoolBuffer = selectedSchoolData?.is_buffer === true || String(selectedSchoolData?.is_buffer) === 'true';
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
@@ -1416,6 +1440,7 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedSchools([]);
+                          setRequestedItems([]);
                         }}
                         className="text-[10px] font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest mr-2"
                       >
@@ -2028,9 +2053,29 @@ const NewRequestModal: React.FC<NewRequestModalProps> = ({
 
           <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
-              <h3 className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{toTitleCase("Items List")} <span style={{ color: 'var(--brand-accent)' }}>*</span></h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">{toTitleCase("Items List")} <span style={{ color: 'var(--brand-accent)' }}>*</span></h3>
+                {selectedSchools.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const autoItems = getItemsForSchools(selectedSchools);
+                      if (autoItems.length > 0) {
+                        setRequestedItems(autoItems);
+                        showSuccess('Items Synced', `Re-populated ${autoItems.length} item line(s) from School Monitoring.`);
+                      } else {
+                        showWarning('No Items Found', 'No items configured in School Monitoring for the selected school(s).');
+                      }
+                    }}
+                    className="text-[10px] font-bold text-brand-orange hover:underline flex items-center gap-1 cursor-pointer transition-opacity"
+                    title="Re-populate items from School Monitoring records"
+                  >
+                    <RefreshCw size={11} /> Sync School Items
+                  </button>
+                )}
+              </div>
               {(() => {
-                const isAddItemDisabled = !program || requestedItems.some(ri => !!ri.bundle_name);
+                const isAddItemDisabled = !program;
                 return (
                   <button 
                     onClick={handleAddItem} 

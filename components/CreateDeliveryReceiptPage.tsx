@@ -293,19 +293,23 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             .select('*')
             .order('school_name', { ascending: true });
           if (!error && data && data.length > 0) {
-            loaded = data.map((row: any) => ({
-              ...row,
-              id: row.id,
-              school_name: row.school_name,
-              school_monitoring_id: row.school_monitoring_id || '',
-              customer_code: row.customer_code,
-              program: row.program,
-              sales_team: row.sales_team,
-              class_opening: row.class_opening,
-              target_deployment_date: row.target_deployment_date,
-              status: row.status,
-              items: row.items || []
-            }));
+            loaded = data.map((row: any) => {
+              const rawCustCode = row.customer_code || '';
+              const cleanCustCode = rawCustCode.includes('__') ? rawCustCode.split('__')[0] : rawCustCode;
+              return {
+                ...row,
+                id: row.id,
+                school_name: row.school_name,
+                school_monitoring_id: row.school_monitoring_id || '',
+                customer_code: cleanCustCode,
+                program: row.program || '',
+                sales_team: row.sales_team,
+                class_opening: row.class_opening,
+                target_deployment_date: row.target_deployment_date,
+                status: row.status,
+                items: row.items || []
+              };
+            });
           }
         } catch (e) {
           console.error('Failed to fetch school_monitoring from Supabase', e);
@@ -580,14 +584,32 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
         if (invRes && invRes.data) {
           setInventoryItems(invRes.data);
         }
-        if (schoolsRes && schoolsRes.data) {
+        if (schoolsRes && schoolsRes.data && schoolsRes.data.length > 0) {
           setSchoolsList(schoolsRes.data);
+        } else {
+          // Fallback to localStorage or mock schools
+          const localSchools = localStorage.getItem('schools');
+          if (localSchools) {
+            try {
+              const parsed = JSON.parse(localSchools);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setSchoolsList(parsed);
+              } else {
+                setSchoolsList(MOCK_SCHOOLS);
+              }
+            } catch {
+              setSchoolsList(MOCK_SCHOOLS);
+            }
+          } else {
+            setSchoolsList(MOCK_SCHOOLS);
+          }
         }
         if (stocksRes && stocksRes.data) {
           setLocationStocksList(stocksRes.data);
         }
       } catch (err) {
         console.error('Error fetching database records:', err);
+        setSchoolsList(MOCK_SCHOOLS);
       }
     };
     fetchEquipmentAndDbRecords();
@@ -639,6 +661,16 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     };
   }, []);
 
+  // Helper function to resolve the exact location for a given school name / code
+  const resolveSchoolLocation = (schoolName: string, customerCode: string, fallbackLoc?: string) => {
+    if (fallbackLoc && fallbackLoc !== 'BAGUIO CITY, BEN') return fallbackLoc;
+    const matched = schoolsList.find(s => 
+      (customerCode && s.customer_code && s.customer_code.trim().toLowerCase() === customerCode.trim().toLowerCase()) ||
+      (schoolName && s.name && s.name.trim().toLowerCase() === schoolName.trim().toLowerCase())
+    );
+    return matched?.location || fallbackLoc || '';
+  };
+
   // Handle school suggestion selections
   const handleSelectSchool = (school: any) => {
     const schoolName = school.school_name || school.name || '';
@@ -646,9 +678,20 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     setSchoolSearchQuery(schoolName);
     const smId = schoolType === 'new' ? (school.school_monitoring_id || school.id || '') : '';
     setSchoolMonitoringId(smId);
-    setClientCode(school.customer_code || school.customerCode || '');
-    setAddress(school.location || school.address || 'BAGUIO CITY, BEN');
-    setAgent(school.sales_team || school.salesTeam || 'Team Gina');
+    const code = school.customer_code || school.customerCode || '';
+    setClientCode(code);
+
+    // Accurately map address to the exact school location from the database
+    const matchedDbSchool = schoolsList.find(s => 
+      (code && s.customer_code && s.customer_code.trim().toLowerCase() === code.trim().toLowerCase()) ||
+      (schoolName && s.name && s.name.trim().toLowerCase() === schoolName.trim().toLowerCase())
+    );
+
+    const accurateLocation = school.location || matchedDbSchool?.location || school.address || '';
+    setAddress(accurateLocation);
+
+    const salesRep = school.sales_team || school.salesTeam || matchedDbSchool?.sales_team || 'Team Gina';
+    setAgent(salesRep);
     
     // Auto populate the project as program
     const programName = school.program || '';
@@ -2038,27 +2081,39 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     <p className="text-[10px] font-bold text-brand-orange uppercase p-1.5 tracking-wide border-b border-b-slate-100 dark:border-b-indigo-950/20 mb-1">
                       {schoolType === 'new' ? 'Matched School Monitoring Records' : 'Matched Management Schools List'}
                     </p>
-                    {filteredSchools.map((s, i) => (
-                      <button
-                        key={`${s.school_name || s.name || 'school'}-${i}`}
-                        type="button"
-                        onClick={() => handleSelectSchool(s)}
-                        className={`w-full text-left p-2 rounded-lg text-sm leading-tight transition-all flex flex-col gap-0.5 ${
-                          isDarkMode ? 'hover:bg-slate-955 hover:text-amber-400' : 'hover:bg-amber-50 hover:text-brand-orange'
-                        }`}
-                      >
-                        <span className="font-bold">{s.school_name || s.name}</span>
-                        {schoolType === 'new' ? (
-                          <span className="text-[11px] text-brand-orange font-mono font-extrabold">
-                            School Monitoring ID: {s.school_monitoring_id || s.id || '-'}
-                          </span>
-                        ) : (
-                          <span className="text-[11px] text-emerald-500 font-mono font-extrabold">
-                            Existing School (Client Code: {s.customer_code || '-'})
-                          </span>
-                        )}
-                      </button>
-                    ))}
+                    {filteredSchools.map((s, i) => {
+                      const sName = s.school_name || s.name || '';
+                      const cCode = s.customer_code || s.customerCode || '';
+                      const resolvedLoc = s.location || resolveSchoolLocation(sName, cCode, s.address);
+                      return (
+                        <button
+                          key={`${sName}-${i}`}
+                          type="button"
+                          onClick={() => handleSelectSchool(s)}
+                          className={`w-full text-left p-2.5 rounded-lg text-sm leading-tight transition-all flex flex-col gap-1 border-b last:border-b-0 ${
+                            isDarkMode ? 'hover:bg-slate-800/80 border-slate-800 text-white' : 'hover:bg-amber-50/80 border-slate-100 text-slate-800'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-bold text-xs sm:text-sm">{sName}</span>
+                            {resolvedLoc && (
+                              <span className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 truncate max-w-[200px] flex items-center gap-0.5">
+                                📍 {resolvedLoc}
+                              </span>
+                            )}
+                          </div>
+                          {schoolType === 'new' ? (
+                            <span className="text-[10.5px] text-brand-orange font-mono font-extrabold">
+                              School Monitoring ID: {s.school_monitoring_id || s.id || '-'} {cCode ? `• Client: ${cCode}` : ''}
+                            </span>
+                          ) : (
+                            <span className="text-[10.5px] text-emerald-600 dark:text-emerald-400 font-mono font-extrabold">
+                              Existing School {cCode ? `(Client Code: ${cCode})` : ''}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2072,9 +2127,17 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     type="text"
                     placeholder="e.g., C00000231(GS)"
                     value={clientCode}
-                    onChange={(e) => setClientCode(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setClientCode(val);
+                      // If typing client code matches a school, auto-resolve location if empty
+                      if (val && !address) {
+                        const matched = schoolsList.find(s => s.customer_code?.toLowerCase() === val.toLowerCase());
+                        if (matched?.location) setAddress(matched.location);
+                      }
+                    }}
                     className={`w-full px-3 py-1 rounded-lg border text-sm focus:outline-none ${
-                      isDarkMode ? 'bg-slate-950 border-slate-805 text-mono' : 'bg-slate-50 border-slate-200 text-slate-800'
+                      isDarkMode ? 'bg-slate-950 border-slate-805 text-mono text-white' : 'bg-slate-50 border-slate-200 text-slate-800'
                     }`}
                   />
                 </div>
@@ -2082,10 +2145,30 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
 
               {/* Address input */}
               <div className="flex flex-col gap-0.5 sm:col-span-2">
-                <label className="text-xs font-bold uppercase text-slate-400 tracking-wider">Address Location</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase text-slate-400 tracking-wider flex items-center gap-1">
+                    <span>Address Location</span>
+                    <span className="text-[9.5px] font-medium text-slate-400 lowercase">(maps to school &gt; location)</span>
+                  </label>
+                  {deliveredTo && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const loc = resolveSchoolLocation(deliveredTo, clientCode);
+                        if (loc) {
+                          setAddress(loc);
+                          showInfo('Location Synced', `Updated address to: ${loc}`);
+                        }
+                      }}
+                      className="text-[10px] font-bold text-brand-orange hover:underline cursor-pointer flex items-center gap-0.5"
+                    >
+                      <RefreshCw size={10} /> Sync School Location
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
-                  placeholder="ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN"
+                  placeholder="e.g., ASSUMPTION ROAD, 2600 BAGUIO CITY, BEN"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
                   className={`px-3 py-1 rounded-lg border text-sm focus:outline-none ${

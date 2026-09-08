@@ -33,7 +33,7 @@ ALTER TABLE schools ADD CONSTRAINT schools_customer_code_unique UNIQUE (customer
 -- 5. Create school_monitoring table
 CREATE TABLE IF NOT EXISTS school_monitoring (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  customer_code TEXT UNIQUE NOT NULL,
+  customer_code TEXT,
   school_name TEXT NOT NULL,
   program TEXT,
   sales_team TEXT,
@@ -88,5 +88,10 @@ ALTER TABLE item_requests ADD COLUMN IF NOT EXISTS school_monitoring_id TEXT;
 
 -- Drop check constraint on school_monitoring.program to allow any exact program selection (e.g., TNL, NGS+ACE, etc.)
 ALTER TABLE school_monitoring DROP CONSTRAINT IF EXISTS school_monitoring_program_check;
+
+-- Drop unique constraint on customer_code to allow multiple school monitoring entries for the same customer
+ALTER TABLE school_monitoring DROP CONSTRAINT IF EXISTS school_monitoring_customer_code_key;
+ALTER TABLE school_monitoring DROP CONSTRAINT IF EXISTS school_monitoring_customer_code_unique;
+ALTER TABLE school_monitoring ALTER COLUMN customer_code DROP NOT NULL;
 
 

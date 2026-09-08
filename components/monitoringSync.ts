@@ -85,9 +85,14 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
               ? JSON.parse(row.status_dates) 
               : (row.status_dates || { 1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: '' });
 
+            const rawCustomerCode = row.customer_code || '';
+            const cleanCustomerCode = rawCustomerCode.includes('__') 
+              ? rawCustomerCode.split('__')[0] 
+              : rawCustomerCode;
+
             return {
               id: row.id,
-              customer_code: row.customer_code,
+              customer_code: cleanCustomerCode,
               school_name: row.school_name,
               program: row.program || '',
               sales_team: row.sales_team,
@@ -328,12 +333,15 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
         try {
           for (const rec of recordsToUpsert) {
             const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rec.id || '');
+            const cleanProgram = (rec.program && typeof rec.program === 'string' && rec.program.trim()) 
+              ? rec.program.trim() 
+              : null;
 
             const dbPayload = {
               id: isUUID ? rec.id : undefined,
               customer_code: rec.customer_code,
               school_name: rec.school_name,
-              program: rec.program || null,
+              program: cleanProgram,
               sales_team: rec.sales_team,
               class_opening: rec.class_opening,
               target_deployment_date: rec.target_deployment_date,
@@ -346,9 +354,25 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
               updated_at: new Date().toISOString()
             };
 
-            await supabase
-              .from('school_monitoring')
-              .upsert(dbPayload, { onConflict: 'customer_code' });
+            if (isUUID) {
+              const res = await supabase
+                .from('school_monitoring')
+                .upsert(dbPayload, { onConflict: 'id' });
+
+              if (res.error) {
+                let retryPayload = { ...dbPayload };
+                if (res.error.code === '23514' || res.error.message?.includes('school_monitoring_program_check')) {
+                  retryPayload.program = null;
+                }
+                if (res.error.code === '23505' || res.error.message?.includes('school_monitoring_customer_code_key')) {
+                  const suffix = rec.school_monitoring_id ? `__${rec.school_monitoring_id}` : `__${Date.now()}`;
+                  retryPayload.customer_code = `${rec.customer_code || 'CUST'}${suffix}`;
+                }
+                await supabase
+                  .from('school_monitoring')
+                  .upsert(retryPayload, { onConflict: 'id' });
+              }
+            }
           }
         } catch (err) {
           console.warn('Failed to upsert updated school monitoring records to Supabase:', err);
