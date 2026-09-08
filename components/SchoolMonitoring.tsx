@@ -3,12 +3,35 @@ import {
   Search, Plus, Trash2, Edit3, ChevronDown, ChevronUp, Loader2, 
   Calendar, FileText, ShoppingCart, Truck, School, User, 
   Settings, CheckCircle2, AlertCircle, X, Layers, Bell, ClipboardList, AppWindow, Play,
-  Download, RefreshCw, Sparkles, PackageCheck, Package, ArrowUp, ArrowDown
+  Download, RefreshCw, Sparkles, PackageCheck, Package, ArrowUp, ArrowDown, Check, CheckSquare, Square
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { toTitleCase, getProgramBadgeClass, parseAssignedTeams, isTeamAccessible } from '../lib/utils';
 import { useNotification } from './NotificationProvider';
 import DeleteConfirmationModal from './DeleteConfirmationModal';
+
+export const PROTRACK_PROGRAMS = [
+  'Gatekeeping 3.0',
+  'Cashless Canteen 3.0',
+  'Parent Portal',
+  'Grading System'
+];
+
+export const ARALINKS_PROGRAMS = [
+  'NGS',
+  'HUB',
+  'TNL',
+  'ACE',
+  'NGS+ACE',
+  'HUB+ACE',
+  'PELS NGS',
+  'PELS NGS+ACE',
+  'ACE+PELS',
+  'ABDL',
+  'ACE+ABDL',
+  'HUB+NGS',
+  'ABDL (PELS)'
+];
 
 interface DesignatedHardwareItem {
   item_code: string;
@@ -351,6 +374,31 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       );
     }) || null;
   }, [schoolMonitoringId, records, editingRecord]);
+
+  // Protrack multi-selection helper
+  const selectedProtrackPrograms = useMemo(() => {
+    if (!program) return [];
+    const parts = program.split(/[+,]/).map(p => p.trim()).filter(Boolean);
+    return PROTRACK_PROGRAMS.filter(p => parts.includes(p) || program.includes(p));
+  }, [program]);
+
+  const toggleProtrackProgram = (progName: string) => {
+    let nextSelected: string[];
+    if (selectedProtrackPrograms.includes(progName)) {
+      nextSelected = selectedProtrackPrograms.filter(p => p !== progName);
+    } else {
+      nextSelected = [...selectedProtrackPrograms, progName];
+    }
+    setProgram(nextSelected.join(' + '));
+  };
+
+  const selectAllProtrackPrograms = () => {
+    setProgram(PROTRACK_PROGRAMS.join(' + '));
+  };
+
+  const clearProtrackPrograms = () => {
+    setProgram('');
+  };
 
   // Search and filter states
   const [equipmentSearchQuery, setEquipmentSearchQuery] = useState('');
@@ -1267,8 +1315,10 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setFormItems(formItems.filter((_, idx) => idx !== index));
   };
 
-  const generateSchoolMonitoringId = (existingRecords: SchoolMonitoringRecord[]) => {
+  const generateSchoolMonitoringId = (existingRecords: SchoolMonitoringRecord[], selectedTeam?: string) => {
     const currentYear = new Date().getFullYear();
+    const isProtrack = (selectedTeam || '').trim().toLowerCase() === 'protrack';
+    const prefix = isProtrack ? 'PIT-IMS' : 'ARAL-IMS';
     let maxNum = 0;
     const existingIdSet = new Set<string>();
 
@@ -1277,21 +1327,23 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         const cleanId = r.school_monitoring_id.trim().toUpperCase();
         existingIdSet.add(cleanId);
 
-        const match = cleanId.match(/(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
+        if (cleanId.startsWith(prefix)) {
+          const match = cleanId.match(/(\d+)$/);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (!isNaN(num) && num > maxNum) {
+              maxNum = num;
+            }
           }
         }
       }
     });
 
     let nextNum = Math.max(maxNum + 1, 1);
-    let candidate = `ARAL-IMS-${currentYear}-${String(nextNum).padStart(4, '0')}`;
+    let candidate = `${prefix}-${currentYear}-${String(nextNum).padStart(4, '0')}`;
     while (existingIdSet.has(candidate.toUpperCase())) {
       nextNum++;
-      candidate = `ARAL-IMS-${currentYear}-${String(nextNum).padStart(4, '0')}`;
+      candidate = `${prefix}-${currentYear}-${String(nextNum).padStart(4, '0')}`;
     }
     return candidate;
   };
@@ -1305,7 +1357,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setProgram('');
     setCustomerCode('');
     setSalesTeam('');
-    setTeam('');
+    const defaultTeam = isSingleTeam ? assignedTeams[0] : (teamFilter !== 'ALL' && teamFilter !== 'All Teams' ? teamFilter : 'Aralinks');
+    setTeam(defaultTeam);
     setClassOpening('');
     setTargetDeploymentDate('');
     setCurrentStatus(1);
@@ -1315,7 +1368,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       1: '', 2: '', 3: '', 4: '', 5: '', 6: '', 7: ''
     });
     setFormItems([]);
-    setSchoolMonitoringId(generateSchoolMonitoringId(records));
+    setSchoolMonitoringId(generateSchoolMonitoringId(records, defaultTeam));
     setTypeOfDocument('');
     setIsFormOpen(true);
   };
@@ -1337,7 +1390,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setEquipmentSearchQuery('');
     setStatusDates({ ...record.status_dates });
     setFormItems([...record.items]);
-    setSchoolMonitoringId(record.school_monitoring_id || generateSchoolMonitoringId(records));
+    setSchoolMonitoringId(record.school_monitoring_id || generateSchoolMonitoringId(records, record.team));
     setTypeOfDocument((record.type_of_document as any) || '');
     setIsFormOpen(true);
     automateStages(record.school_name);
@@ -2612,9 +2665,57 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 <div className="p-4 bg-slate-50 dark:bg-slate-950/40 border border-slate-150 dark:border-slate-850 rounded-2xl space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-150">
                   <h3 className="text-xs font-black uppercase text-slate-440 tracking-wider">SECTION 1: PARTNER SPECIFICATION</h3>
                   
+                  {/* Priority Assigned Team Selection (Buttons) */}
+                  <div className="p-3.5 bg-white dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-800 rounded-xl space-y-2 shadow-xs">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-black uppercase text-slate-500 dark:text-slate-400 tracking-wider flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-brand-orange animate-pulse"></span>
+                        Assigned Team <span className="text-[9.5px] font-bold text-slate-400 lowercase">(Priority Selection)</span>
+                      </label>
+                      {team && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-brand-orange/10 text-brand-orange border border-brand-orange/20">
+                          {team}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {['Aralinks', 'Protrack'].map((t) => {
+                        const isSelected = team.toLowerCase() === t.toLowerCase();
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => {
+                              if (team !== t) {
+                                setTeam(t);
+                                setSchoolMonitoringId(generateSchoolMonitoringId(records, t));
+                                // Clear program if switching team
+                                if (t === 'Protrack' && !PROTRACK_PROGRAMS.some(p => program.includes(p))) {
+                                  setProgram('');
+                                } else if (t === 'Aralinks' && PROTRACK_PROGRAMS.some(p => program.includes(p))) {
+                                  setProgram('');
+                                }
+                              }
+                            }}
+                            className={`flex items-center justify-center gap-2.5 py-3 px-4 rounded-xl text-xs font-black tracking-wide transition-all cursor-pointer border ${
+                              isSelected
+                                ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/25 ring-2 ring-brand-orange/20 scale-[1.01]'
+                                : isDarkMode
+                                  ? 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border-slate-700 hover:border-slate-600'
+                                  : 'bg-slate-100 hover:bg-slate-200/80 text-slate-700 border-slate-200 hover:border-slate-300'
+                            }`}
+                          >
+                            <span className={`w-2.5 h-2.5 rounded-full ${isSelected ? 'bg-white shadow-xs' : 'bg-slate-400'}`} />
+                            <span>{t}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
                     {/* School Name custom searchable auto-complete */}
-                    <div className="sm:col-span-4 flex flex-col gap-1 relative">
+                    <div className="sm:col-span-6 flex flex-col gap-1 relative">
                       <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide flex items-center gap-1">
                         School Name <span className="text-[9px] font-bold text-brand-orange">(type or search)</span>
                       </label>
@@ -2687,33 +2788,8 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                       )}
                     </div>
 
-                    {/* Program drop box */}
-                    <div className="sm:col-span-3 flex flex-col gap-1">
-                      <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Program</label>
-                      <select
-                        value={program}
-                        onChange={(e) => setProgram(e.target.value)}
-                        className="w-full border border-slate-200 dark:border-slate-850 bg-white dark:bg-slate-900 rounded-lg p-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand-orange text-slate-800 dark:text-white"
-                      >
-                        <option value="">-- No program (Null) --</option>
-                        <option value="NGS">NGS</option>
-                        <option value="HUB">HUB</option>
-                        <option value="TNL">TNL</option>
-                        <option value="ACE">ACE</option>
-                        <option value="NGS+ACE">NGS+ACE</option>
-                        <option value="HUB+ACE">HUB+ACE</option>
-                        <option value="PELS NGS">PELS NGS</option>
-                        <option value="PELS NGS+ACE">PELS NGS+ACE</option>
-                        <option value="ACE+PELS">ACE+PELS</option>
-                        <option value="ABDL">ABDL</option>
-                        <option value="ACE+ABDL">ACE+ABDL</option>
-                        <option value="HUB+NGS">HUB+NGS</option>
-                        <option value="ABDL (PELS)">ABDL (PELS)</option>
-                      </select>
-                    </div>
-
                     {/* Customer code autofocus view */}
-                    <div className="sm:col-span-2 flex flex-col gap-1">
+                    <div className="sm:col-span-3 flex flex-col gap-1">
                       <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide opacity-80">Customer Code</label>
                       <input
                         type="text"
@@ -2735,21 +2811,98 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                         className="w-full border border-slate-155 dark:border-slate-800 bg-slate-100 dark:bg-slate-955 p-2 text-sm text-slate-550 font-bold rounded-lg focus:outline-none"
                       />
                     </div>
+                  </div>
 
-                    {/* Assigned Team */}
-                    <div className="sm:col-span-4 flex flex-col gap-1 mt-1">
-                      <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide">Assigned Team</label>
-                      <select
-                        value={team}
-                        onChange={(e) => setTeam(e.target.value)}
-                        className="w-full border border-slate-200 dark:border-slate-850 bg-white dark:bg-slate-900 rounded-lg p-2 text-sm focus:outline-none focus:ring-1 focus:ring-brand-orange text-slate-800 dark:text-white"
-                        required
-                      >
-                        <option value="" disabled>Select Team</option>
-                        <option value="Aralinks">Aralinks</option>
-                        <option value="Protrack">Protrack</option>
-                      </select>
-                    </div>
+                  {/* Program Selection - Dynamic by Assigned Team */}
+                  <div className="p-3.5 bg-white dark:bg-slate-900/90 border border-slate-200/90 dark:border-slate-850 rounded-xl space-y-2.5 shadow-xs">
+                    {team?.toLowerCase() === 'protrack' ? (
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div>
+                            <label className="text-[11px] font-black uppercase text-slate-500 dark:text-slate-400 tracking-wider flex items-center gap-1.5">
+                              Protrack Programs <span className="text-[9.5px] font-bold text-brand-orange">(Multiple Selection Allowed)</span>
+                            </label>
+                            <p className="text-[10px] text-slate-400 font-medium">Click each program button to toggle selection</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={selectAllProtrackPrograms}
+                              className="text-[10px] font-bold text-brand-orange hover:underline cursor-pointer"
+                            >
+                              Select All
+                            </button>
+                            <span className="text-slate-300 dark:text-slate-700">|</span>
+                            <button
+                              type="button"
+                              onClick={clearProtrackPrograms}
+                              className="text-[10px] font-bold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
+                          {PROTRACK_PROGRAMS.map((progName) => {
+                            const isSelected = selectedProtrackPrograms.includes(progName);
+                            return (
+                              <button
+                                key={progName}
+                                type="button"
+                                onClick={() => toggleProtrackProgram(progName)}
+                                className={`flex items-center justify-between p-3 rounded-xl border text-left transition-all cursor-pointer select-none ${
+                                  isSelected
+                                    ? 'bg-brand-orange/10 border-brand-orange text-brand-orange dark:text-orange-400 shadow-xs font-black ring-1 ring-brand-orange/30'
+                                    : isDarkMode
+                                      ? 'bg-slate-800/50 hover:bg-slate-800 border-slate-700 text-slate-300 font-bold'
+                                      : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700 font-bold'
+                                }`}
+                              >
+                                <span className="text-xs">{progName}</span>
+                                <div className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all ${
+                                  isSelected 
+                                    ? 'bg-brand-orange border-brand-orange text-white shadow-xs' 
+                                    : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900'
+                                }`}>
+                                  {isSelected && <Check size={13} className="stroke-[3]" />}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {program ? (
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Active Selection ({selectedProtrackPrograms.length}):</span>
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-brand-orange/15 text-brand-orange border border-brand-orange/20">
+                              {program}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-[10.5px] font-medium text-slate-400 italic">No program selected (optional)</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-black text-slate-400 uppercase tracking-wide flex items-center justify-between">
+                          <span>Aralinks Program</span>
+                          {program && (
+                            <span className="text-[10px] font-bold text-brand-orange lowercase">selected: {program}</span>
+                          )}
+                        </label>
+                        <select
+                          value={program}
+                          onChange={(e) => setProgram(e.target.value)}
+                          className="w-full border border-slate-200 dark:border-slate-850 bg-white dark:bg-slate-900 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand-orange text-slate-800 dark:text-white"
+                        >
+                          <option value="">-- No program (Null) --</option>
+                          {ARALINKS_PROGRAMS.map((progOption) => (
+                            <option key={progOption} value={progOption}>{progOption}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
@@ -2784,7 +2937,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                         <button
                           type="button"
                           onClick={() => {
-                            const freshId = generateSchoolMonitoringId(records);
+                            const freshId = generateSchoolMonitoringId(records, team);
                             setSchoolMonitoringId(freshId);
                           }}
                           className="text-[10px] font-extrabold text-brand-orange hover:text-orange-600 flex items-center gap-1 cursor-pointer transition-colors"
@@ -2797,7 +2950,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                       <div className="relative">
                         <input
                           type="text"
-                          placeholder="e.g. ARAL-IMS-2026-0001"
+                          placeholder={team?.toLowerCase() === 'protrack' ? 'e.g. PIT-IMS-2026-0001' : 'e.g. ARAL-IMS-2026-0001'}
                           value={schoolMonitoringId}
                           onChange={(e) => setSchoolMonitoringId(e.target.value.toUpperCase())}
                           className={`w-full border p-2 text-sm font-mono font-bold rounded-lg focus:outline-none transition-all ${

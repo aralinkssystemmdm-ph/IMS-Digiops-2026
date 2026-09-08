@@ -94,6 +94,18 @@ export function getProgramBadgeClass(program: string | null | undefined): string
   if (prog.includes('ABDL')) {
     return 'bg-rose-100 text-rose-650 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/50';
   }
+  if (prog.includes('GATEKEEPING')) {
+    return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300 border border-cyan-200/50';
+  }
+  if (prog.includes('CASHLESS')) {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300 border border-amber-200/50';
+  }
+  if (prog.includes('PARENT PORTAL')) {
+    return 'bg-violet-100 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300 border border-violet-200/50';
+  }
+  if (prog.includes('GRADING')) {
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300 border border-emerald-200/50';
+  }
   return 'bg-slate-100 text-slate-705 dark:bg-slate-800 dark:text-slate-300 border border-slate-200/50';
 }
 
