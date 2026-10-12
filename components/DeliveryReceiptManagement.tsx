@@ -101,8 +101,8 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     receivedBy: 'Prof. Amalia Reyes',
     remarks: 'Installation of interactive whiteboards in Science block.',
     items: [
-      { id: 'item-1', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 30, uom: 'PCS', serialNumber: 'SN-TB-489201', category: 'Tablets', remarks: 'With heavy-duty bumper cases' },
-      { id: 'item-2', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 5, uom: 'PCS', serialNumber: 'SN-SIB-882193', category: 'Displays', remarks: 'Wall mount included' }
+      { id: 'item-1', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 30, uom: 'PCS', serialNumber: 'SN-TB-489201', category: 'Tablets', remarks: 'With heavy-duty bumper cases', deliveryStatus: 'Delivered' },
+      { id: 'item-2', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 5, uom: 'PCS', serialNumber: 'SN-SIB-882193', category: 'Displays', remarks: 'Wall mount included', deliveryStatus: 'Delivered' }
     ]
   },
   {
@@ -121,8 +121,8 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     receivedBy: 'Engr. Manuel Garcia',
     remarks: 'High performance student laptops for virtual simulation tests.',
     items: [
-      { id: 'item-3', item_code: 'EQ-LAP-P15', description: 'Aralinks Laptop Pro V3', qty: 10, uom: 'PCS', serialNumber: 'SN-LP-910245', category: 'Laptops', remarks: 'Core i7, 16GB RAM' },
-      { id: 'item-4', item_code: 'EQ-NET-R54', description: 'Aralinks Access Point V2', qty: 2, uom: 'PCS', serialNumber: 'SN-AP-311200', category: 'Networking', remarks: 'PoE adapters included' }
+      { id: 'item-3', item_code: 'EQ-LAP-P15', description: 'Aralinks Laptop Pro V3', qty: 10, uom: 'PCS', serialNumber: 'SN-LP-910245', category: 'Laptops', remarks: 'Core i7, 16GB RAM', deliveryStatus: 'Delivered' },
+      { id: 'item-4', item_code: 'EQ-NET-R54', description: 'Aralinks Access Point V2', qty: 2, uom: 'PCS', serialNumber: 'SN-AP-311200', category: 'Networking', remarks: 'PoE adapters included', deliveryStatus: 'Delivered' }
     ]
   },
   {
@@ -141,8 +141,8 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     receivedBy: 'Rev. Fr. Julius Torres',
     remarks: 'Primary grade classroom device setup.',
     items: [
-      { id: 'item-5', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 75, uom: 'PCS', serialNumber: 'SN-TB-774021', category: 'Tablets' },
-      { id: 'item-6', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 5, uom: 'PCS', serialNumber: 'SN-SIB-229410', category: 'Displays' }
+      { id: 'item-5', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 75, uom: 'PCS', serialNumber: 'SN-TB-774021', category: 'Tablets', deliveryStatus: 'Delivered' },
+      { id: 'item-6', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 5, uom: 'PCS', serialNumber: 'SN-SIB-229410', category: 'Displays', deliveryStatus: 'Delivered' }
     ]
   },
   {
@@ -159,7 +159,7 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     deliveredBy: 'LBC Logistics',
     remarks: 'Units picked up from depot and dispatched.',
     items: [
-      { id: 'item-7', item_code: 'EQ-VR-G02', description: 'Aralinks VR Headset G2', qty: 15, uom: 'PCS', serialNumber: 'SN-VR-504932', category: 'VR Gear', remarks: 'With controllers and travel bags' }
+      { id: 'item-7', item_code: 'EQ-VR-G02', description: 'Aralinks VR Headset G2', qty: 15, uom: 'PCS', serialNumber: 'SN-VR-504932', category: 'VR Gear', remarks: 'With controllers and travel bags', deliveryStatus: 'Pending' }
     ]
   },
   {
@@ -175,7 +175,7 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     deliveredBy: 'Pending dispatch',
     remarks: 'Awaiting client technical confirmation for smart board accessory units.',
     items: [
-      { id: 'item-8', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 4, uom: 'PCS', serialNumber: 'SN-SIB-334912', category: 'Displays', remarks: 'With extra replacement styling pens' }
+      { id: 'item-8', item_code: 'EQ-SIB-H75', description: 'Aralinks Smart Interactive Board 75"', qty: 4, uom: 'PCS', serialNumber: 'SN-SIB-334912', category: 'Displays', remarks: 'With extra replacement styling pens', deliveryStatus: 'Pending' }
     ]
   },
   {
@@ -191,7 +191,7 @@ const INITIAL_DR_DATA: DeliveryReceipt[] = [
     deliveredBy: 'N/A',
     remarks: 'Wrong customer specifications, request terminated.',
     items: [
-      { id: 'item-9', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 20, uom: 'PCS', serialNumber: 'SN-TB-011293', category: 'Tablets' }
+      { id: 'item-9', item_code: 'EQ-TAB-A10', description: 'Aralinks Tablet Book Lite', qty: 20, uom: 'PCS', serialNumber: 'SN-TB-011293', category: 'Tablets', deliveryStatus: 'Pending' }
     ]
   }
 ];
@@ -271,7 +271,18 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
     const saved = localStorage.getItem('aralinks_delivery_receipts');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed: DeliveryReceipt[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map(r => {
+            const rawItems = r.hardwareItems || r.items || [];
+            let curStatus = ((r.status as string) === 'In transit' ? 'In Transit' : r.status) as DeliveryReceipt['status'];
+            if ((curStatus === 'Delivered' || curStatus === 'Partially Delivered') && Array.isArray(rawItems) && rawItems.length > 0) {
+              const allDelivered = rawItems.every(item => item.deliveryStatus === 'Delivered');
+              curStatus = allDelivered ? 'Delivered' : 'Partially Delivered';
+            }
+            return { ...r, status: curStatus };
+          });
+        }
       } catch (e) {
         console.error('Error parsed storage receipts', e);
       }
@@ -293,37 +304,48 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
           .select('*');
 
         if (!error && data) {
-          const loaded: DeliveryReceipt[] = data.map((row: any) => ({
-            id: row.id,
-            schoolName: row.school_name,
-            schoolMonitoringId: row.school_monitoring_id,
-            school_monitoring_id: row.school_monitoring_id,
-            clientCode: row.client_code,
-            agent: row.agent,
-            project: row.project,
-            date: row.date,
-            status: row.status === 'In transit' ? 'In Transit' : row.status,
-            inTransitDate: row.in_transit_date,
-            deliveredDate: row.delivered_date,
-            targetDeliveryDate: row.target_delivery_date,
-            totalItems: row.total_items,
-            issuedBy: row.issued_by,
-            deliveredBy: row.delivered_by,
-            receivedBy: row.received_by,
-            remarks: row.remarks,
-            items: typeof row.hardware_items === 'string' ? JSON.parse(row.hardware_items) : (row.hardware_items || []),
-            hardwareItems: typeof row.hardware_items === 'string' ? JSON.parse(row.hardware_items) : (row.hardware_items || []),
-            serviceItems: typeof row.service_items === 'string' ? JSON.parse(row.service_items) : (row.service_items || []),
-            signatoryPrepared: typeof row.signatory_prepared === 'string' ? JSON.parse(row.signatory_prepared) : row.signatory_prepared,
-            signatoryApproved: typeof row.signatory_approved === 'string' ? JSON.parse(row.signatory_approved) : row.signatory_approved,
-            signatoryDelivered: typeof row.signatory_delivered === 'string' ? JSON.parse(row.signatory_delivered) : row.signatory_delivered,
-            signatoryCheckedReceived: typeof row.signatory_checked_received === 'string' ? JSON.parse(row.signatory_checked_received) : row.signatory_checked_received,
-            address: row.address,
-            contactPerson: row.contact_person,
-            contactNo: row.contact_no,
-            moa: row.moa,
-            deliveryHistory: typeof row.delivery_history === 'string' ? JSON.parse(row.delivery_history) : (row.delivery_history || [])
-          }));
+          const loaded: DeliveryReceipt[] = data.map((row: any) => {
+            const rawItems = typeof row.hardware_items === 'string' ? JSON.parse(row.hardware_items) : (row.hardware_items || []);
+            let curStatus = row.status === 'In transit' ? 'In Transit' : row.status;
+
+            // In delivery receipt: if not all items in list are marked as delivered, make status partially delivered
+            if ((curStatus === 'Delivered' || curStatus === 'Partially Delivered') && Array.isArray(rawItems) && rawItems.length > 0) {
+              const allDelivered = rawItems.every((item: any) => item.deliveryStatus === 'Delivered');
+              curStatus = allDelivered ? 'Delivered' : 'Partially Delivered';
+            }
+
+            return {
+              id: row.id,
+              schoolName: row.school_name,
+              schoolMonitoringId: row.school_monitoring_id,
+              school_monitoring_id: row.school_monitoring_id,
+              clientCode: row.client_code,
+              agent: row.agent,
+              project: row.project,
+              date: row.date,
+              status: curStatus,
+              inTransitDate: row.in_transit_date,
+              deliveredDate: row.delivered_date,
+              targetDeliveryDate: row.target_delivery_date,
+              totalItems: row.total_items,
+              issuedBy: row.issued_by,
+              deliveredBy: row.delivered_by,
+              receivedBy: row.received_by,
+              remarks: row.remarks,
+              items: rawItems,
+              hardwareItems: rawItems,
+              serviceItems: typeof row.service_items === 'string' ? JSON.parse(row.service_items) : (row.service_items || []),
+              signatoryPrepared: typeof row.signatory_prepared === 'string' ? JSON.parse(row.signatory_prepared) : row.signatory_prepared,
+              signatoryApproved: typeof row.signatory_approved === 'string' ? JSON.parse(row.signatory_approved) : row.signatory_approved,
+              signatoryDelivered: typeof row.signatory_delivered === 'string' ? JSON.parse(row.signatory_delivered) : row.signatory_delivered,
+              signatoryCheckedReceived: typeof row.signatory_checked_received === 'string' ? JSON.parse(row.signatory_checked_received) : row.signatory_checked_received,
+              address: row.address,
+              contactPerson: row.contact_person,
+              contactNo: row.contact_no,
+              moa: row.moa,
+              deliveryHistory: typeof row.delivery_history === 'string' ? JSON.parse(row.delivery_history) : (row.delivery_history || [])
+            };
+          });
           setReceipts(loaded);
           localStorage.setItem('aralinks_delivery_receipts', JSON.stringify(loaded));
         }
@@ -825,10 +847,12 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
 
           let itemStatus: 'Pending' | 'Delivered' | 'Cancelled' = 'Pending';
           if (processedQty >= origItem.qty) {
-            if (cancelledQty >= origItem.qty) {
+            if (deliveredQty >= origItem.qty) {
+              itemStatus = 'Delivered';
+            } else if (cancelledQty >= origItem.qty) {
               itemStatus = 'Cancelled';
             } else {
-              itemStatus = 'Delivered';
+              itemStatus = 'Cancelled';
             }
           }
 
@@ -838,8 +862,9 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
           };
         });
 
-        const hasAnyPending = updatedItems.some(item => item.deliveryStatus === 'Pending' || !item.deliveryStatus);
-        const determinedStatus: DeliveryReceipt['status'] = hasAnyPending ? 'Partially Delivered' : 'Delivered';
+        // If not all items in the list are marked as delivered, make status Partially Delivered
+        const allItemsDelivered = updatedItems.length > 0 && updatedItems.every(item => item.deliveryStatus === 'Delivered');
+        const determinedStatus: DeliveryReceipt['status'] = allItemsDelivered ? 'Delivered' : 'Partially Delivered';
 
         return {
           ...r,
@@ -899,10 +924,12 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
 
           let itemStatus: 'Pending' | 'Delivered' | 'Cancelled' = 'Pending';
           if (processedQty >= origItem.qty) {
-            if (cancelledQty >= origItem.qty) {
+            if (deliveredQty >= origItem.qty) {
+              itemStatus = 'Delivered';
+            } else if (cancelledQty >= origItem.qty) {
               itemStatus = 'Cancelled';
             } else {
-              itemStatus = 'Delivered';
+              itemStatus = 'Cancelled';
             }
           }
 
@@ -912,8 +939,9 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
           };
         });
 
-        const hasAnyPending = updatedItems.some(item => item.deliveryStatus === 'Pending' || !item.deliveryStatus);
-        const determinedStatus: DeliveryReceipt['status'] = hasAnyPending ? 'Partially Delivered' : 'Delivered';
+        // If not all items in the list are marked as delivered, make status Partially Delivered
+        const allItemsDelivered = updatedItems.length > 0 && updatedItems.every(item => item.deliveryStatus === 'Delivered');
+        const determinedStatus: DeliveryReceipt['status'] = allItemsDelivered ? 'Delivered' : 'Partially Delivered';
 
         return {
           ...prev,
@@ -2858,7 +2886,16 @@ const DeliveryReceiptManagement: React.FC<DeliveryReceiptManagementProps> = ({
                   const totalProcessedQty = totalDeliveredQty + totalCancelledQty;
                   const totalPendingQty = Math.max(0, totalRequestedQty - totalProcessedQty);
 
-                  const predictedStatus: DeliveryReceipt['status'] = (totalProcessedQty >= totalRequestedQty) ? 'Delivered' : 'Partially Delivered';
+                  const allItemsDelivered = sourceItems.length > 0 && sourceItems.every(origItem => {
+                    const itemHistory = processedHistory.filter((h: any) => 
+                      h.itemId === origItem.id || 
+                      (origItem.item_code && h.item_code === origItem.item_code)
+                    );
+                    const deliveredQty = itemHistory.filter((h: any) => h.deliveryStatus === 'Delivered').reduce((sum: number, h: any) => sum + h.qty, 0);
+                    return deliveredQty >= origItem.qty;
+                  });
+
+                  const predictedStatus: DeliveryReceipt['status'] = allItemsDelivered ? 'Delivered' : 'Partially Delivered';
 
                   return (
                     <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-955 border border-slate-200 dark:border-slate-800 flex items-center justify-between">

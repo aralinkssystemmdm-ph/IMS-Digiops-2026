@@ -63,7 +63,21 @@ export function cleanPONumber(poString: string | null | undefined): string {
     .join(', ');
 }
 
+const DYNAMIC_BUNDLE_PALETTES = [
+  { bg: '#2563eb', text: '#ffffff', lightBg: '#eff6ff', border: '#bfdbfe' }, // Blue
+  { bg: '#7c3aed', text: '#ffffff', lightBg: '#f5f3ff', border: '#ddd6fe' }, // Violet
+  { bg: '#0891b2', text: '#ffffff', lightBg: '#ecfeff', border: '#a5f3fc' }, // Cyan
+  { bg: '#059669', text: '#ffffff', lightBg: '#ecfdf5', border: '#a7f3d0' }, // Emerald
+  { bg: '#d97706', text: '#ffffff', lightBg: '#fffbeb', border: '#fde68a' }, // Amber
+  { bg: '#db2777', text: '#ffffff', lightBg: '#fdf2f8', border: '#fbcfe8' }, // Pink
+  { bg: '#4f46e5', text: '#ffffff', lightBg: '#eef2ff', border: '#c7d2fe' }, // Indigo
+  { bg: '#ea580c', text: '#ffffff', lightBg: '#fff7ed', border: '#fed7aa' }, // Orange
+  { bg: '#0d9488', text: '#ffffff', lightBg: '#f0fdfa', border: '#99f6e4' }, // Teal
+  { bg: '#c026d3', text: '#ffffff', lightBg: '#fdf4ff', border: '#f5d0fe' }  // Fuchsia
+];
+
 export function getBundleColor(bundleName: string) {
+  if (!bundleName) return null;
   const raw = bundleName.toLowerCase();
   const clean = raw.replace(/[^a-z0-9]/g, '');
   
@@ -72,7 +86,15 @@ export function getBundleColor(bundleName: string) {
   if (clean.includes('microbit')) return { bg: '#3b82f6', text: '#ffffff', lightBg: '#eff6ff', border: '#bfdbfe' }; // Blue
   if (clean.includes('arduino')) return { bg: '#8b5cf6', text: '#ffffff', lightBg: '#f5f3ff', border: '#ddd6fe' }; // Violet
   if (clean.includes('raspberry')) return { bg: '#ec4899', text: '#ffffff', lightBg: '#fdf2f8', border: '#fbcfe8' }; // Pink
-  return null;
+
+  // Deterministic palette pick based on string hash for all other bundles
+  let hash = 0;
+  for (let i = 0; i < bundleName.length; i++) {
+    hash = (hash << 5) - hash + bundleName.charCodeAt(i);
+    hash |= 0;
+  }
+  const index = Math.abs(hash) % DYNAMIC_BUNDLE_PALETTES.length;
+  return DYNAMIC_BUNDLE_PALETTES[index];
 }
 
 export function getProgramBadgeClass(program: string | null | undefined): string {

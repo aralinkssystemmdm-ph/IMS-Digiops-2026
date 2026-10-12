@@ -34,7 +34,9 @@ import {
   Image,
   FileUp,
   RefreshCw,
-  Edit3
+  Edit3,
+  Package,
+  Layers
 } from 'lucide-react';
 import { useNotification } from './NotificationProvider';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -244,7 +246,7 @@ interface CreateDeliveryReceiptPageProps {
 export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps> = ({ isDarkMode = false }) => {
   const { drId } = useParams<{ drId?: string }>();
   const navigate = useNavigate();
-  const { showSuccess, showError, showInfo } = useNotification();
+  const { showSuccess, showError, showInfo, showWarning } = useNotification();
 
   const isEditMode = !!drId;
 
@@ -747,21 +749,23 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
     );
   }, [schoolSearchQuery, schoolType, monitoringRecords, schoolsList]);
 
-  // Computed school monitoring record based on selected school name
+  // Computed school monitoring record based on selected school name or ID
   const selectedSchoolRecord = useMemo(() => {
-    if (schoolType !== 'new') return null;
-    return monitoringRecords.find(r => (r.school_name || r.name || '').toLowerCase() === deliveredTo.toLowerCase());
-  }, [deliveredTo, schoolType, monitoringRecords]);
+    return monitoringRecords.find(r => 
+      (deliveredTo && (r.school_name || r.name || '').toLowerCase() === deliveredTo.toLowerCase()) ||
+      (schoolMonitoringId && (r.school_id === schoolMonitoringId || r.id === schoolMonitoringId))
+    );
+  }, [deliveredTo, schoolMonitoringId, monitoringRecords]);
 
   // Computed bundles from selected school monitoring record
   const schoolMonitoringBundles = useMemo(() => {
-    if (schoolType !== 'new' || !selectedSchoolRecord || !selectedSchoolRecord.items || !Array.isArray(selectedSchoolRecord.items)) {
+    if (!selectedSchoolRecord || !selectedSchoolRecord.items || !Array.isArray(selectedSchoolRecord.items)) {
       return [];
     }
     const bundlesMap = new Map<string, any[]>();
     selectedSchoolRecord.items.forEach((item: any) => {
-      if (item.bundle_name) {
-        const bName = item.bundle_name.trim();
+      const bName = (item.bundle_name || item.bundle || '').trim();
+      if (bName) {
         if (!bundlesMap.has(bName)) {
           bundlesMap.set(bName, []);
         }
@@ -775,7 +779,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
       }
     });
     return Array.from(bundlesMap.entries()).map(([name, items]) => ({ name, items }));
-  }, [selectedSchoolRecord, schoolType]);
+  }, [selectedSchoolRecord]);
 
   const handleApplyMonitoringBundleDirect = (bundleName: string, items: any[]) => {
     const populatedHardware = items.map((it: any, index: number) => {
@@ -788,18 +792,93 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
         description: it.item_name || it.description || '',
         specifications: it.specifications || matched?.spec || '',
         remarks: `Bundle: ${bundleName}`,
-        item_code: itemCode
+        item_code: itemCode,
+        bundle_name: bundleName,
+        bundle: bundleName
       };
     });
 
     setHardwareItems(prev => {
       // Filter out previous items for this bundle, then append new ones
-      const filtered = prev.filter(item => item.remarks !== `Bundle: ${bundleName}`);
+      const filtered = prev.filter(item => {
+        const b = item.bundle_name || item.bundle || (item.remarks?.startsWith('Bundle: ') ? item.remarks.replace('Bundle: ', '').trim() : '');
+        return b !== bundleName;
+      });
       return [...filtered, ...populatedHardware];
     });
 
     showSuccess('Bundle Populated', `Successfully populated ${populatedHardware.length} items from "${bundleName}" based on school monitoring quantities.`);
   };
+
+  const handlePopulateAllBundles = () => {
+    if (schoolMonitoringBundles.length === 0) {
+      showWarning('No Bundles', 'No bundles available from school monitoring to populate.');
+      return;
+    }
+
+    const allNewItems: DRHardwareItem[] = [];
+    const populatedNames: string[] = [];
+
+    schoolMonitoringBundles.forEach((b, bIdx) => {
+      populatedNames.push(b.name);
+      b.items.forEach((it: any, index: number) => {
+        const itemCode = it.item_code || '';
+        const matched = MOCK_HARDWARE_CATALOG.find(c => c.code === itemCode);
+        allNewItems.push({
+          id: `hw-${itemCode}-${bIdx}-${index}-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          qty: it.quantity || it.qty || 1,
+          unit: it.unit || it.uom || matched?.unit || 'pcs',
+          description: it.item_name || it.description || '',
+          specifications: it.specifications || matched?.spec || '',
+          remarks: `Bundle: ${b.name}`,
+          item_code: itemCode,
+          bundle_name: b.name,
+          bundle: b.name
+        });
+      });
+    });
+
+    setHardwareItems(prev => {
+      // Filter out any previous items from these bundles
+      const filtered = prev.filter(item => {
+        const b = item.bundle_name || item.bundle || (item.remarks?.startsWith('Bundle: ') ? item.remarks.replace('Bundle: ', '').trim() : '');
+        return !populatedNames.includes(b);
+      });
+      return [...filtered, ...allNewItems];
+    });
+
+    showSuccess(
+      'All Bundles Populated', 
+      `Successfully populated all ${allNewItems.length} items across ${schoolMonitoringBundles.length} bundles.`
+    );
+  };
+
+  const hardwareBundlesSummary = useMemo(() => {
+    const summaryMap = new Map<string, { count: number; qty: number }>();
+    hardwareItems.forEach(item => {
+      const bName = item.bundle_name || item.bundle || (() => {
+        if (item.remarks) {
+          const match = item.remarks.match(/bundle:\s*([^,;]+)/i);
+          if (match && match[1]) return match[1].trim();
+        }
+        return '';
+      })();
+      if (bName) {
+        const existing = summaryMap.get(bName) || { count: 0, qty: 0 };
+        summaryMap.set(bName, {
+          count: existing.count + 1,
+          qty: existing.qty + Number(item.qty || 0)
+        });
+      }
+    });
+
+    return Array.from(summaryMap.entries()).map(([name, data]) => ({
+      name,
+      count: data.count,
+      qty: data.qty,
+      color: getBundleColor(name) || { bg: '#FE4E02', text: '#ffffff', lightBg: '#fff7ed', border: '#fed7aa' }
+    }));
+  }, [hardwareItems]);
 
   const resolvedInventoryItems = useMemo(() => {
     if (inventoryItems && inventoryItems.length > 0) {
@@ -841,7 +920,9 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
           unit: 'pcs',
           description: 'Aralinks Tablet Book Lite',
           specifications: 'A10 Pro 10.4" Quadcore 4G/128G',
-          remarks: 'ACE Program Tablet Classroom Package'
+          remarks: 'ACE Program Tablet Classroom Package',
+          bundle_name: 'Tablet Classroom Bundle',
+          bundle: 'Tablet Classroom Bundle'
         },
         {
           id: `hw-bundle-sib-${timestamp}-2`,
@@ -849,7 +930,9 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
           unit: 'pcs',
           description: 'Aralinks Smart Interactive Board 75"',
           specifications: 'UHD 4K Quad Pen Dual OS Win11',
-          remarks: 'ACE Program Tablet Classroom Package'
+          remarks: 'ACE Program Tablet Classroom Package',
+          bundle_name: 'Tablet Classroom Bundle',
+          bundle: 'Tablet Classroom Bundle'
         }
       ];
       showSuccess('ACE Classroom Bundle Added', 'Added 50 Tablet Books + 1 Smart Interactive Board to hardware list.');
@@ -861,7 +944,9 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
           unit: 'pcs',
           description: 'Aralinks Smart Interactive Board 75"',
           specifications: 'UHD 4K Quad Pen Dual OS Win11',
-          remarks: 'ACE Interactive Board Package'
+          remarks: 'ACE Interactive Board Package',
+          bundle_name: 'SIB Bundle',
+          bundle: 'SIB Bundle'
         }
       ];
       showSuccess('ACE SIB Bundle Added', 'Added 1 Smart Interactive Board to hardware list.');
@@ -914,7 +999,9 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             description: bundleItem.description || '',
             specifications: spec,
             remarks: `Bundle: ${pendingBundle}`,
-            item_code: bundleItem.item_code
+            item_code: bundleItem.item_code,
+            bundle_name: pendingBundle,
+            bundle: pendingBundle
           });
         });
         
@@ -1569,6 +1656,11 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
 
       const computedTotalItems = hardwareItems.reduce((sum, item) => sum + Number(item.qty || 0), 0);
 
+      const itemsWithStatus = hardwareItems.map(item => ({
+        ...item,
+        deliveryStatus: statusLower === 'delivered' ? ('Delivered' as const) : ('Pending' as const)
+      }));
+
       // Map back to global management schema so that listings automatically integrate
       const newDRRecord = {
         id: drNo,
@@ -1588,7 +1680,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
         receivedBy: signatoryCheckedReceived.name || '',
         remarks: remarks || '',
         // Full local metadata
-        hardwareItems,
+        hardwareItems: itemsWithStatus,
         serviceItems,
         signatoryPrepared,
         signatoryApproved,
@@ -1630,7 +1722,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
             delivered_by: signatoryDelivered.name || '',
             received_by: signatoryCheckedReceived.name || '',
             remarks: remarks || '',
-            hardware_items: hardwareItems,
+            hardware_items: itemsWithStatus,
             service_items: serviceItems,
             signatory_prepared: signatoryPrepared,
             signatory_approved: signatoryApproved,
@@ -2288,7 +2380,7 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                   </span>
                 )}
               </div>
-              <div className="flex gap-1.5 items-center relative">
+              <div className="flex gap-1.5 items-center relative flex-wrap">
                 {schoolType === 'existing' && (
                   <button
                     type="button"
@@ -2297,6 +2389,18 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                   >
                     <Plus size={12} strokeWidth={2.5} />
                     Add Hardware Row
+                  </button>
+                )}
+                {schoolMonitoringBundles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePopulateAllBundles}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:opacity-95 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                    style={{ backgroundColor: 'var(--brand-accent)' }}
+                    title={`Populate all items across all ${schoolMonitoringBundles.length} bundles`}
+                  >
+                    <Layers size={13} strokeWidth={2.5} />
+                    Populate All Bundles
                   </button>
                 )}
                 {project && (availableBundles.length > 0 || project === 'ACE') && (
@@ -2372,26 +2476,64 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
 
             {schoolMonitoringBundles.length > 0 && (
               <div className="p-4 border rounded-xl bg-slate-50/50 dark:bg-black/10 animate-in fade-in duration-300" style={{ borderColor: 'var(--brand-accent)' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <Sparkles size={14} style={{ color: 'var(--brand-accent)' }} />
-                  <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Bundles from School Monitoring ({schoolMonitoringBundles.length})</span>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={14} style={{ color: 'var(--brand-accent)' }} />
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                      Bundles from School Monitoring ({schoolMonitoringBundles.length})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePopulateAllBundles}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider text-white shadow-xs hover:opacity-95 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                    style={{ backgroundColor: 'var(--brand-accent)' }}
+                  >
+                    <Layers size={13} strokeWidth={2.5} />
+                    Populate All Bundles
+                  </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {schoolMonitoringBundles.map((b) => {
-                    const isCurrentlyAdded = hardwareItems.some(ri => ri.remarks && ri.remarks.includes(`Bundle: ${b.name}`));
+                    const isCurrentlyAdded = hardwareItems.some(ri => {
+                      const riBundle = ri.bundle_name || ri.bundle || (ri.remarks && ri.remarks.includes(`Bundle: ${b.name}`));
+                      return riBundle === b.name || (ri.remarks && ri.remarks.includes(`Bundle: ${b.name}`));
+                    });
+                    const bColor = getBundleColor(b.name);
                     return (
                       <div 
                         key={b.name}
                         className={`p-3 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
                           isCurrentlyAdded 
-                            ? 'bg-slate-100 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800 opacity-80' 
+                            ? 'bg-slate-100/90 dark:bg-slate-900/60 border-slate-200 dark:border-slate-800' 
                             : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-[#FE4E02]'
                         }`}
+                        style={bColor ? {
+                          borderLeftWidth: '4px',
+                          borderLeftColor: bColor.bg
+                        } : undefined}
                       >
                         <div>
-                          <p className={`text-xs font-bold leading-tight ${isCurrentlyAdded ? 'text-slate-400 dark:text-slate-500' : 'text-slate-700 dark:text-white'}`}>
-                            {b.name}
-                          </p>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-black uppercase tracking-wide leading-tight text-slate-800 dark:text-white flex items-center gap-1.5">
+                              {bColor && (
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: bColor.bg }} />
+                              )}
+                              {b.name}
+                            </p>
+                            {bColor && (
+                              <span
+                                className="px-1.5 py-0.5 rounded text-[8.5px] font-black uppercase tracking-wider border shrink-0"
+                                style={{
+                                  backgroundColor: isDarkMode ? `${bColor.bg}20` : bColor.lightBg,
+                                  color: bColor.bg,
+                                  borderColor: bColor.border
+                                }}
+                              >
+                                Bundle Package
+                              </span>
+                            )}
+                          </div>
                           <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
                             Contains {b.items.length} hardware items.
                           </p>
@@ -2404,8 +2546,15 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                             ))}
                           </div>
                           {isCurrentlyAdded && (
-                            <span className="inline-block mt-3 px-1.5 py-0.5 rounded text-[8px] font-bold bg-green-100 dark:bg-green-500/20 text-green-600 dark:text-green-400 uppercase tracking-wider">
-                              Added to DR
+                            <span 
+                              className="inline-flex items-center gap-1 mt-3 px-2 py-0.5 rounded text-[8.5px] font-black uppercase tracking-wider border"
+                              style={{
+                                backgroundColor: isDarkMode ? `${bColor?.bg || '#10b981'}25` : (bColor?.lightBg || '#ecfdf5'),
+                                color: bColor?.bg || '#059669',
+                                borderColor: bColor?.border || '#a7f3d0'
+                              }}
+                            >
+                              <CheckCircle2 size={10} /> Added to DR
                             </span>
                           )}
                         </div>
@@ -2416,23 +2565,23 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                           }}
                           className={`w-full py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
                             isCurrentlyAdded
-                              ? 'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 hover:bg-green-500/20'
+                              ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 hover:opacity-90'
                               : 'bg-transparent border active:scale-95'
                           }`}
                           style={!isCurrentlyAdded ? {
-                            color: 'var(--brand-accent)',
-                            borderColor: 'var(--brand-accent)'
+                            color: bColor?.bg || 'var(--brand-accent)',
+                            borderColor: bColor?.bg || 'var(--brand-accent)'
                           } : {}}
                           onMouseEnter={(e) => {
                             if (!isCurrentlyAdded) {
-                              e.currentTarget.style.backgroundColor = 'var(--brand-accent)';
+                              e.currentTarget.style.backgroundColor = bColor?.bg || 'var(--brand-accent)';
                               e.currentTarget.style.color = '#ffffff';
                             }
                           }}
                           onMouseLeave={(e) => {
                             if (!isCurrentlyAdded) {
                               e.currentTarget.style.backgroundColor = 'transparent';
-                              e.currentTarget.style.color = 'var(--brand-accent)';
+                              e.currentTarget.style.color = bColor?.bg || 'var(--brand-accent)';
                             }
                           }}
                         >
@@ -2442,6 +2591,35 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     );
                   })}
                 </div>
+              </div>
+            )}
+
+            {/* Bundles Legend / Identifier Summary Bar */}
+            {hardwareBundlesSummary.length > 0 && (
+              <div className="flex items-center justify-between gap-2 flex-wrap p-2.5 rounded-xl bg-slate-100/70 dark:bg-slate-900/50 border border-slate-200/60 dark:border-slate-800 text-xs">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1 shrink-0 mr-1">
+                    <Layers size={12} className="text-brand-orange" /> Bundles in List ({hardwareBundlesSummary.length}):
+                  </span>
+                  {hardwareBundlesSummary.map(b => (
+                    <span
+                      key={b.name}
+                      className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-2xs"
+                      style={{
+                        backgroundColor: isDarkMode ? `${b.color.bg}22` : b.color.lightBg,
+                        color: b.color.bg,
+                        borderColor: b.color.border || b.color.bg
+                      }}
+                    >
+                      <Package size={10} strokeWidth={2.5} />
+                      {b.name}
+                      <span className="opacity-80 font-mono text-[9px]">({b.count} items, {b.qty} qty)</span>
+                    </span>
+                  ))}
+                </div>
+                <span className="text-[10px] font-bold text-slate-400">
+                  {hardwareItems.length} total card{hardwareItems.length > 1 ? 's' : ''}
+                </span>
               </div>
             )}
 
@@ -2455,12 +2633,28 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                 })();
                 const isSerialized = isSerializedItem(rowItemCode, row.description);
 
+                const bundleName = row.bundle_name || row.bundle || (() => {
+                  if (row.remarks) {
+                    const match = row.remarks.match(/bundle:\s*([^,;]+)/i);
+                    if (match && match[1]) return match[1].trim();
+                  }
+                  return '';
+                })();
+                const bundleColor = bundleName ? getBundleColor(bundleName) : null;
+
                 return (
                   <div 
                     key={row.id} 
-                    className={`p-3 rounded-xl border flex flex-col gap-2 relative transition-all duration-200 ${
-                      isDarkMode ? 'bg-slate-950/20 border-slate-801 hover:border-slate-700' : 'bg-slate-50/50 border-slate-105 hover:border-slate-200'
+                    className={`p-3.5 rounded-xl border flex flex-col gap-2 relative transition-all duration-200 ${
+                      bundleColor 
+                        ? 'border-l-4 shadow-2xs' 
+                        : (isDarkMode ? 'bg-slate-955/20 border-slate-801 hover:border-slate-700' : 'bg-slate-50/50 border-slate-105 hover:border-slate-200')
                     }`}
+                    style={bundleColor ? {
+                      borderLeftColor: bundleColor.bg,
+                      borderColor: isDarkMode ? `${bundleColor.bg}35` : bundleColor.border,
+                      backgroundColor: isDarkMode ? `${bundleColor.bg}0d` : bundleColor.lightBg
+                    } : undefined}
                   >
                   {/* Delete Hardware row button top-right */}
                   <button
@@ -2485,12 +2679,32 @@ export const CreateDeliveryReceiptPage: React.FC<CreateDeliveryReceiptPageProps>
                     const hasInsufficientStock = availableStock < Number(row.qty || 0);
 
                     return (
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                        <div className="text-xs font-extrabold text-brand-orange font-mono select-none flex items-center gap-2">
-                          Hardware Unit #{index + 1}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 flex-wrap">
+                        <div className="text-xs font-extrabold font-mono select-none flex items-center gap-2 flex-wrap">
+                          <span style={{ color: bundleColor ? bundleColor.bg : 'var(--brand-accent)' }}>
+                            Hardware Unit #{index + 1}
+                          </span>
                           {rowItemCode && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 font-mono font-normal">
                               Code: {rowItemCode}
+                            </span>
+                          )}
+                          {/* Bundle Identifier Tag */}
+                          {bundleName ? (
+                            <span 
+                              className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1 border shadow-2xs"
+                              style={{ 
+                                backgroundColor: isDarkMode ? `${bundleColor?.bg}25` : bundleColor?.lightBg,
+                                color: bundleColor?.bg,
+                                borderColor: bundleColor?.border || bundleColor?.bg
+                              }}
+                            >
+                              <Package size={11} strokeWidth={2.5} />
+                              Bundle: {bundleName}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold text-slate-400 bg-slate-100/70 dark:bg-slate-800/70 border border-slate-200/50 dark:border-slate-700/50">
+                              Individual Item
                             </span>
                           )}
                         </div>
