@@ -13,12 +13,15 @@ interface StockTransferModalProps {
     item_code: string;
     item_name: string;
     total_quantity: number;
+    team?: string;
   };
   isDarkMode?: boolean;
   isEmbedded?: boolean;
 }
 
 interface LocationStock {
+  id?: string;
+  team?: string;
   location: string;
   quantity: number;
   conditions: {
@@ -192,15 +195,27 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
     if (!isSupabaseConfigured) return;
     setLoading(true);
     try {
-      const { data } = await supabase
+      let query = supabase
         .from('item_location_stocks')
-        .select('location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty')
+        .select('id, location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty, team')
         .eq('item_code', code)
-        .gt('quantity', 0)
-        .order('quantity', { ascending: false });
+        .gt('quantity', 0);
+
+      if (item?.team) {
+        const teamLower = item.team.trim().toLowerCase();
+        if (teamLower === 'aralinks') {
+          query = query.or('team.ilike.aralinks,team.is.null');
+        } else {
+          query = query.ilike('team', teamLower);
+        }
+      }
+
+      const { data } = await query.order('quantity', { ascending: false });
 
       if (data) {
         setLocations(data.map(d => ({
+          id: d.id,
+          team: d.team,
           location: d.location,
           quantity: d.quantity,
           conditions: {
@@ -357,6 +372,8 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
       const currentUser = localStorage.getItem('aralinks_user') || 'System';
       const reqNo = `TRF-${Math.floor(100000 + Math.random() * 900000)}`;
 
+      const teamVal = sourceStock.team || (item?.team ? item.team.toLowerCase() : null);
+
       // 1. Save Transfer Record (transfer_requests)
       const { error: trError } = await supabase
         .from('transfer_requests')
@@ -375,13 +392,29 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
           brand_new_qty: transferConditions.brand_new,
           used_qty: transferConditions.used,
           defective_qty: transferConditions.defective,
-          disposal_qty: transferConditions.disposal
+          disposal_qty: transferConditions.disposal,
+          team: teamVal
         }]);
 
       if (trError) throw trError;
 
+      // 1b. Record in stock_transactions ledger
+      await supabase
+        .from('stock_transactions')
+        .insert([{
+          item_code: selectedItem.code,
+          from_location: fromLocation,
+          to_location: toLocation,
+          quantity: totalTransferQty,
+          transaction_type: 'Transfer',
+          reference_id: reqNo,
+          created_by: currentUser,
+          reason: remarks || `Stock Transfer: ${fromLocation} -> ${toLocation}`,
+          team: teamVal
+        }]);
+
       // 2. Subtract from Source
-      const { error: subError } = await supabase
+      let subQuery = supabase
         .from('item_location_stocks')
         .update({ 
           quantity: sourceStock.quantity - totalTransferQty,
@@ -389,19 +422,32 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
           used_qty: sourceConditions.used - transferConditions.used,
           defective_qty: sourceConditions.defective - transferConditions.defective,
           disposal_qty: sourceConditions.disposal - transferConditions.disposal
-        })
-        .eq('item_code', selectedItem.code)
-        .eq('location', fromLocation);
+        });
 
+      if (sourceStock.id) {
+        subQuery = subQuery.eq('id', sourceStock.id);
+      } else {
+        subQuery = subQuery.eq('item_code', selectedItem.code).eq('location', fromLocation);
+      }
+
+      const { error: subError } = await subQuery;
       if (subError) throw subError;
 
-      // 3. Add to Destination
-      const { data: destStock } = await supabase
+      // 3. Add to Destination (matching team)
+      let destQuery = supabase
         .from('item_location_stocks')
-        .select('id, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty')
+        .select('id, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty, team')
         .eq('item_code', selectedItem.code)
-        .eq('location', toLocation)
-        .maybeSingle();
+        .eq('location', toLocation);
+
+      if (teamVal) {
+        if (teamVal === 'aralinks') {
+          destQuery = destQuery.or('team.ilike.aralinks,team.is.null');
+        } else {
+          destQuery = destQuery.ilike('team', teamVal);
+        }
+      }
+      const { data: destStock } = await destQuery.maybeSingle();
 
       if (destStock) {
         await supabase
@@ -411,7 +457,8 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
             brand_new_qty: (destStock.brand_new_qty || 0) + transferConditions.brand_new,
             used_qty: (destStock.used_qty || 0) + transferConditions.used,
             defective_qty: (destStock.defective_qty || 0) + transferConditions.defective,
-            disposal_qty: (destStock.disposal_qty || 0) + transferConditions.disposal
+            disposal_qty: (destStock.disposal_qty || 0) + transferConditions.disposal,
+            team: teamVal || destStock.team
           })
           .eq('id', destStock.id);
       } else {
@@ -425,7 +472,8 @@ const StockTransferModal: React.FC<StockTransferModalProps> = ({
             brand_new_qty: transferConditions.brand_new,
             used_qty: transferConditions.used,
             defective_qty: transferConditions.defective,
-            disposal_qty: transferConditions.disposal
+            disposal_qty: transferConditions.disposal,
+            team: teamVal
           }]);
       }
 

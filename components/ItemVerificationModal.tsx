@@ -260,15 +260,24 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
       }
 
       const loc = to_location || request.location || 'IT Basement';
+      const reqTeam = (request?.team || (request?.requestType === 'SMS-PROTRACK' || request?.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase();
 
       // 1. Update stock if quantity changed
       if (qtyDiff !== 0) {
-        const { data: currentStock } = await supabase
+        let currentStockQuery = supabase
           .from('item_location_stocks')
-          .select('id, quantity, brand_new_qty')
+          .select('id, quantity, brand_new_qty, team')
           .eq('item_code', itemCode)
-          .eq('location', loc)
-          .maybeSingle();
+          .eq('location', loc);
+
+        if (reqTeam) {
+          if (reqTeam === 'aralinks') {
+            currentStockQuery = currentStockQuery.or('team.ilike.aralinks,team.is.null');
+          } else {
+            currentStockQuery = currentStockQuery.ilike('team', reqTeam);
+          }
+        }
+        const { data: currentStock } = await currentStockQuery.maybeSingle();
 
         if (currentStock) {
           const newTotal = Math.max(0, (currentStock.quantity || 0) + qtyDiff);
@@ -278,6 +287,7 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
             .update({
               quantity: newTotal,
               brand_new_qty: newBrandNew,
+              team: reqTeam || currentStock.team,
               updated_at: new Date().toISOString()
             })
             .eq('id', currentStock.id);
@@ -291,6 +301,7 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
               location: loc,
               quantity: Math.max(0, qtyDiff),
               brand_new_qty: Math.max(0, qtyDiff),
+              team: reqTeam,
               updated_at: new Date().toISOString()
             }]);
           if (stockInsErr) throw stockInsErr;
@@ -354,7 +365,8 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
         .update({
           quantity: qty,
           reason: reason || null,
-          created_at: created_at
+          created_at: created_at,
+          team: reqTeam
         })
         .eq('id', id);
       if (txErr) throw txErr;
@@ -475,12 +487,21 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
       const loc = item.to_location || item.location || request.location || 'IT Basement';
 
       // 1. Deduct stock from item_location_stocks
-      const { data: currentStock } = await supabase
+      const reqTeam = (request?.team || (request?.requestType === 'SMS-PROTRACK' || request?.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')).toLowerCase();
+      let currentStockQuery = supabase
         .from('item_location_stocks')
-        .select('id, quantity, brand_new_qty')
+        .select('id, quantity, brand_new_qty, team')
         .eq('item_code', itemCode)
-        .eq('location', loc)
-        .maybeSingle();
+        .eq('location', loc);
+
+      if (reqTeam) {
+        if (reqTeam === 'aralinks') {
+          currentStockQuery = currentStockQuery.or('team.ilike.aralinks,team.is.null');
+        } else {
+          currentStockQuery = currentStockQuery.ilike('team', reqTeam);
+        }
+      }
+      const { data: currentStock } = await currentStockQuery.maybeSingle();
 
       if (currentStock) {
         const newTotal = Math.max(0, (currentStock.quantity || 0) - itemQty);
@@ -748,10 +769,12 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
     }
 
     onClose();
+    const reqTeam = request?.team || (request?.requestType === 'SMS-PROTRACK' || request?.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks');
     navigate(`/requests/${request.id}/serial-entry`, { 
       state: { 
         selectedPO,
-        poItems 
+        poItems,
+        team: reqTeam
       } 
     });
   };
@@ -762,6 +785,8 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
       return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
     });
   };
+
+  const currentRequestTeam = request?.team || (request?.requestType === 'SMS-PROTRACK' || request?.request_type === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks');
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
@@ -781,9 +806,20 @@ const ItemVerificationModal: React.FC<ItemVerificationModalProps> = ({
                   ? toTitleCase('Delivery Records & Deliverables Management')
                   : toTitleCase('Verify Received Items')}
               </h2>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">
-                Requisition #{request.control_no || request.id} • {request.office}
-              </p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <p className="text-xs text-slate-400 font-bold uppercase tracking-wider">
+                  Requisition #{request.control_no || request.id} • {request.office}
+                </p>
+                {currentRequestTeam && (
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                    currentRequestTeam.toLowerCase() === 'protrack'
+                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/40'
+                      : 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40'
+                  }`}>
+                    {toTitleCase(currentRequestTeam)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <button 

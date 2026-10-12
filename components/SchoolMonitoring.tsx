@@ -245,7 +245,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Sorting state (default: descending by School Monitoring ID)
-  type SortField = 'school_monitoring_id' | 'customer_code' | 'school_name' | 'team' | 'program' | 'sales_team' | 'class_opening' | 'target_deployment_date' | 'status';
+  type SortField = 'school_monitoring_id' | 'customer_code' | 'school_name' | 'type_of_document' | 'team' | 'program' | 'sales_team' | 'class_opening' | 'target_deployment_date' | 'status';
   const [sortField, setSortField] = useState<SortField>('school_monitoring_id');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
@@ -405,6 +405,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   const [showEquipmentSuggestions, setShowEquipmentSuggestions] = useState(false);
   const [selectedProgramFilter, setSelectedProgramFilter] = useState('ALL');
   const [selectedSalesTeamFilter, setSelectedSalesTeamFilter] = useState('ALL');
+  const [selectedDocumentTypeFilter, setSelectedDocumentTypeFilter] = useState('ALL');
   const [teamFilter, setTeamFilter] = useState(initialTeamFilter);
 
   useEffect(() => {
@@ -579,11 +580,12 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
   };
 
   // Automate Stage step completion dates based on item requests and delivery receipts
-  const automateStages = async (schoolName: string) => {
-    if (!schoolName) return;
+  const automateStages = async (schoolName: string, targetSmId?: string) => {
+    if (!schoolName && !targetSmId) return;
 
     let transitDateVal = '';
     let deliveredDateVal = '';
+    const cleanTargetSmId = (targetSmId || schoolMonitoringId || '').trim().toUpperCase();
     
     // Evaluate delivery receipts (local logs)
     try {
@@ -591,9 +593,16 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       if (drLocal) {
         const receipts = JSON.parse(drLocal) as any[];
         
+        const matchedDRs = receipts.filter(r => {
+          const rSmId = (r.schoolMonitoringId || r.school_monitoring_id || '').trim().toUpperCase();
+          if (rSmId || cleanTargetSmId) {
+            return rSmId === cleanTargetSmId;
+          }
+          return r.schoolName?.trim().toLowerCase() === schoolName?.trim().toLowerCase();
+        });
+
         // Find receipt with Transit status
-        const transitDR = receipts.find(r => 
-          r.schoolName?.trim().toLowerCase() === schoolName.trim().toLowerCase() && 
+        const transitDR = matchedDRs.find(r => 
           (r.status?.toLowerCase() === 'in transit' || r.status?.toLowerCase() === 'partially delivered' || r.status?.toLowerCase() === 'delivered')
         );
         if (transitDR) {
@@ -601,8 +610,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         }
 
         // Find receipt with Delivered status
-        const deliveredDR = receipts.find(r => 
-          r.schoolName?.trim().toLowerCase() === schoolName.trim().toLowerCase() && 
+        const deliveredDR = matchedDRs.find(r => 
           r.status?.toLowerCase() === 'delivered'
         );
         if (deliveredDR) {
@@ -620,17 +628,14 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
 
     if (isSupabaseConfigured) {
       try {
-        const matchedRecord = records.find(r => r.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase());
-        const targetSMId = matchedRecord?.school_monitoring_id || schoolMonitoringId;
-
         let query = supabase
           .from('item_requests')
           .select('id, control_no, date, created_at, school_monitoring_id, status')
           .not('status', 'in', '("Deleted","Rejected","Cancelled")')
           .order('date', { ascending: false });
 
-        if (targetSMId) {
-          query = query.or(`school_monitoring_id.eq."${targetSMId}",school_name.eq."${schoolName}"`);
+        if (cleanTargetSmId) {
+          query = query.eq('school_monitoring_id', cleanTargetSmId);
         } else {
           query = query.eq('school_name', schoolName);
         }
@@ -679,10 +684,13 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         const localIR = localStorage.getItem('aralinks_requests') || localStorage.getItem('aralinks_item_requests');
         if (localIR) {
           const parsed = JSON.parse(localIR);
-          const matched = (parsed || []).find((ir: any) => 
-            (ir.school_monitoring_id && ir.school_monitoring_id.trim().toUpperCase() === schoolMonitoringId?.trim().toUpperCase()) ||
-            (ir.school_name && ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase())
-          );
+          const matched = (parsed || []).find((ir: any) => {
+            const irSmId = (ir.school_monitoring_id || '').trim().toUpperCase();
+            if (irSmId || cleanTargetSmId) {
+              return irSmId === cleanTargetSmId;
+            }
+            return ir.school_name && ir.school_name.trim().toLowerCase() === schoolName?.trim().toLowerCase();
+          });
           if (matched) {
             creationDateVal = matched.date || matched.created_at?.split('T')[0] || '';
             if (matched.status === 'Delivered' || matched.status === 'Partially Delivered') {
@@ -942,10 +950,19 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
 
           // 1. Match by school_monitoring_id in item_requests
           if (record.school_monitoring_id || schoolName) {
-            const matchedIRs = itemRequestsList.filter(ir => 
-              (ir.school_monitoring_id && record.school_monitoring_id && ir.school_monitoring_id.trim().toUpperCase() === record.school_monitoring_id.trim().toUpperCase()) ||
-              (ir.school_name && schoolName && ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase())
-            );
+            const matchedIRs = itemRequestsList.filter(ir => {
+              const isNotCancelled = ir.status !== 'Cancelled' && ir.status !== 'Deleted' && ir.status !== 'Rejected';
+              if (!isNotCancelled) return false;
+
+              const irSmId = (ir.school_monitoring_id || '').trim().toUpperCase();
+              const recSmId = (record.school_monitoring_id || '').trim().toUpperCase();
+
+              if (irSmId || recSmId) {
+                return irSmId === recSmId;
+              }
+
+              return Boolean(ir.school_name && schoolName && ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase());
+            });
 
             if (matchedIRs.length > 0) {
               // Get the latest matched request for stage 3
@@ -995,69 +1012,118 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                   recordChanged = true;
                 }
               }
+            } else if (updatedDates[3]) {
+              // Clear automated creation date if no matching item requests exist for this school monitoring ID
+              updatedDates[3] = '';
+              recordChanged = true;
             }
           }
 
-          // 2. Match by delivery receipts
-          if (schoolName) {
-            const schoolReceipts = receipts.filter(r => 
-              (r.schoolName && r.schoolName.trim().toLowerCase() === schoolName.trim().toLowerCase()) ||
-              (r.clientCode && record.customer_code && r.clientCode.trim().toLowerCase() === record.customer_code.trim().toLowerCase()) ||
-              (r.schoolMonitoringId && record.school_monitoring_id && r.schoolMonitoringId.trim().toLowerCase() === record.school_monitoring_id.trim().toLowerCase()) ||
-              (r.school_monitoring_id && record.school_monitoring_id && r.school_monitoring_id.trim().toLowerCase() === record.school_monitoring_id.trim().toLowerCase())
+          // Preserve Step 5 manual date if entered
+          if (updatedDates[5]) {
+            highestStatus = Math.max(highestStatus, 5);
+          }
+
+          // 2. Match strictly by school_monitoring_id in delivery receipts
+          const schoolReceipts = receipts.filter(r => {
+            const rSmId = (r.schoolMonitoringId || r.school_monitoring_id || '').trim().toUpperCase();
+            const recSmId = (record.school_monitoring_id || '').trim().toUpperCase();
+
+            if (rSmId || recSmId) {
+              return rSmId === recSmId;
+            }
+
+            const matchSchool = Boolean(
+              schoolName && 
+              r.schoolName && 
+              r.schoolName.trim().toLowerCase() === schoolName.trim().toLowerCase()
             );
-            
-            if (schoolReceipts.length > 0) {
-              let inTransitDate = '';
-              let deliveredDate = '';
-              
-              const transitDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'in transit' || r.status?.toLowerCase() === 'partially delivered' || r.status?.toLowerCase() === 'delivered');
-              if (transitDRs.length > 0) {
-                const latestTransit = transitDRs.reduce((latest, r) => {
-                  const curDate = r.inTransitDate || r.date || '';
-                  return (!latest || curDate > latest) ? curDate : latest;
-                }, '');
-                if (latestTransit) inTransitDate = latestTransit;
-              }
-              
-              const deliveredDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'delivered');
-              if (deliveredDRs.length > 0) {
-                highestStatus = 7;
-                const latestDelivered = deliveredDRs.reduce((latest, r) => {
-                  const curDate = r.deliveredDate || r.date || '';
-                  return (!latest || curDate > latest) ? curDate : latest;
-                }, '');
-                if (latestDelivered) deliveredDate = latestDelivered;
-              } else if (transitDRs.length > 0) {
-                highestStatus = Math.max(highestStatus, 6);
-              }
+            const matchClient = Boolean(
+              record.customer_code && 
+              r.clientCode && 
+              r.clientCode.trim().toLowerCase() === record.customer_code.trim().toLowerCase()
+            );
+            return matchSchool || matchClient;
+          });
+          
+          let inTransitDate = '';
+          let deliveredDate = '';
+          
+          const transitDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'in transit' || r.status?.toLowerCase() === 'partially delivered' || r.status?.toLowerCase() === 'delivered');
+          if (transitDRs.length > 0) {
+            const latestTransit = transitDRs.reduce((latest, r) => {
+              const curDate = r.inTransitDate || r.date || '';
+              return (!latest || curDate > latest) ? curDate : latest;
+            }, '');
+            if (latestTransit) inTransitDate = latestTransit;
+          }
+          
+          const deliveredDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'delivered');
+          if (deliveredDRs.length > 0) {
+            highestStatus = 7;
+            const latestDelivered = deliveredDRs.reduce((latest, r) => {
+              const curDate = r.deliveredDate || r.date || '';
+              return (!latest || curDate > latest) ? curDate : latest;
+            }, '');
+            if (latestDelivered) deliveredDate = latestDelivered;
+          } else if (transitDRs.length > 0) {
+            highestStatus = Math.max(highestStatus, 6);
+          }
 
-              const latestTargetDR = schoolReceipts
-                .filter((r: any) => r.targetDeliveryDate)
-                .reduce((latest: any, r: any) => (!latest || r.date > latest.date) ? r : latest, null as any);
+          const latestTargetDR = schoolReceipts
+            .filter((r: any) => r.targetDeliveryDate)
+            .reduce((latest: any, r: any) => (!latest || r.date > latest.date) ? r : latest, null as any);
 
-              if (latestTargetDR && latestTargetDR.targetDeliveryDate && record.target_deployment_date !== latestTargetDR.targetDeliveryDate) {
-                targetDeploymentDate = latestTargetDR.targetDeliveryDate;
-                recordChanged = true;
-              }
+          if (latestTargetDR && latestTargetDR.targetDeliveryDate && record.target_deployment_date !== latestTargetDR.targetDeliveryDate) {
+            targetDeploymentDate = latestTargetDR.targetDeliveryDate;
+            recordChanged = true;
+          }
 
-              if (highestStatus >= 6) {
-                const finalTransitDate = inTransitDate || new Date().toISOString().split('T')[0];
-                if (updatedDates[6] !== finalTransitDate) {
-                  updatedDates[6] = finalTransitDate;
-                  recordChanged = true;
-                }
+          if (deliveredDRs.length > 0) {
+            const finalDelDate = deliveredDate || inTransitDate || new Date().toISOString().split('T')[0];
+            const finalTransitDate = inTransitDate || finalDelDate;
+            if (updatedDates[6] !== finalTransitDate) {
+              updatedDates[6] = finalTransitDate;
+              recordChanged = true;
+            }
+            if (updatedDates[7] !== finalDelDate) {
+              updatedDates[7] = finalDelDate;
+              recordChanged = true;
+            }
+          } else if (transitDRs.length > 0) {
+            const finalTransitDate = inTransitDate || new Date().toISOString().split('T')[0];
+            if (updatedDates[6] !== finalTransitDate) {
+              updatedDates[6] = finalTransitDate;
+              recordChanged = true;
+            }
+            if (updatedDates[7]) {
+              updatedDates[7] = '';
+              recordChanged = true;
+            }
+          } else {
+            // No matching delivery receipt for this specific school monitoring ID!
+            if (updatedDates[6]) {
+              updatedDates[6] = '';
+              recordChanged = true;
+            }
+            if (updatedDates[7]) {
+              updatedDates[7] = '';
+              recordChanged = true;
+            }
+            // Recalculate status back to actual attained stage (1 to 5)
+            let baseStatus = 1;
+            for (let s = 5; s >= 1; s--) {
+              if (updatedDates[s]) {
+                baseStatus = s;
+                break;
               }
-              if (highestStatus >= 7) {
-                const finalDelDate = deliveredDate || inTransitDate || new Date().toISOString().split('T')[0];
-                if (updatedDates[7] !== finalDelDate) {
-                  updatedDates[7] = finalDelDate;
-                  recordChanged = true;
-                }
-              }
-              if (highestStatus !== record.status) {
-                recordChanged = true;
-              }
+            }
+            if (record.status && record.status <= 5) {
+              baseStatus = Math.max(baseStatus, record.status);
+            }
+            if (highestStatus !== baseStatus) {
+              highestStatus = baseStatus;
+              recordChanged = true;
             }
           }
           
@@ -1313,7 +1379,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     if (matched) {
       setCustomerCode(matched.customer_code);
       setSalesTeam(matched.sales_team);
-      automateStages(matched.name);
+      automateStages(matched.name, schoolMonitoringId);
     } else {
       setCustomerCode('');
       setSalesTeam('');
@@ -1489,7 +1555,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     setSchoolMonitoringId(record.school_monitoring_id || generateSchoolMonitoringId(records, record.team));
     setTypeOfDocument((record.type_of_document as any) || '');
     setIsFormOpen(true);
-    automateStages(record.school_name);
+    automateStages(record.school_name, record.school_monitoring_id);
   };
 
   // Delete Action - opens confirmation modal
@@ -1758,6 +1824,17 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     return Array.from(set).sort();
   }, [records]);
 
+  // Get unique document types dynamically from records + standard options
+  const uniqueDocumentTypes = useMemo(() => {
+    const set = new Set<string>(['MOA', 'Addendum', 'AQL', 'IR']);
+    records.forEach(r => {
+      if (r.type_of_document && r.type_of_document.trim()) {
+        set.add(r.type_of_document.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [records]);
+
   // Filter and sort list
   const filteredRecords = useMemo(() => {
     let result = records.filter(r => isTeamAccessible(r.team || 'Aralinks', userTeam, userRole));
@@ -1766,6 +1843,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     }
     if (selectedProgramFilter !== 'ALL') {
       result = result.filter(r => r.program === selectedProgramFilter);
+    }
+    if (selectedDocumentTypeFilter !== 'ALL') {
+      result = result.filter(r => (r.type_of_document || '').trim() === selectedDocumentTypeFilter);
     }
     if (selectedSalesTeamFilter !== 'ALL') {
       result = result.filter(r => r.sales_team === selectedSalesTeamFilter);
@@ -1778,6 +1858,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       result = result.filter(r => 
         r.school_name.toLowerCase().includes(query) ||
         (r.program && r.program.toLowerCase().includes(query)) ||
+        (r.type_of_document && r.type_of_document.toLowerCase().includes(query)) ||
         r.customer_code.toLowerCase().includes(query) ||
         r.sales_team.toLowerCase().includes(query) ||
         (r.school_monitoring_id && r.school_monitoring_id.toLowerCase().includes(query))
@@ -1817,6 +1898,12 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           comparison = progA.localeCompare(progB);
           break;
         }
+        case 'type_of_document': {
+          const docA = a.type_of_document || '';
+          const docB = b.type_of_document || '';
+          comparison = docA.localeCompare(docB);
+          break;
+        }
         case 'sales_team': {
           const teamA = a.sales_team || '';
           const teamB = b.sales_team || '';
@@ -1852,7 +1939,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
       }
       return sortDirection === 'desc' ? -comparison : comparison;
     });
-  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedSalesTeamFilter, teamFilter, sortField, sortDirection]);
+  }, [records, searchQuery, selectedStatusFilter, selectedProgramFilter, selectedDocumentTypeFilter, selectedSalesTeamFilter, teamFilter, sortField, sortDirection]);
 
   // Filtered equipment catalog items
   const filteredEquipment = useMemo(() => {
@@ -1876,9 +1963,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
     };
 
     const headers = [
+      'School Monitoring ID',
       'Customer Code',
       'School Name',
       'Program',
+      'Type of Document',
       'Sales Team',
       'Assigned Team',
       'Class Opening',
@@ -1895,9 +1984,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         : 'None';
       
       return [
+        r.school_monitoring_id || '',
         r.customer_code || '',
         r.school_name || '',
         r.program || '',
+        r.type_of_document || '',
         r.sales_team || '',
         r.team || '',
         r.class_opening ? formatStepDate(r.class_opening) : '',
@@ -2124,6 +2215,21 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 </select>
               </div>
 
+              {/* Type of Document filter dropdown */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider whitespace-nowrap">Doc Type:</span>
+                <select
+                  value={selectedDocumentTypeFilter}
+                  onChange={(e) => setSelectedDocumentTypeFilter(e.target.value)}
+                  className="border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl p-2 text-xs text-slate-850 dark:text-white focus:outline-none focus:ring-1 focus:ring-brand-orange max-w-[150px]"
+                >
+                  <option value="ALL">All Doc Types</option>
+                  {uniqueDocumentTypes.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Sales Team filter dropdown */}
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider whitespace-nowrap">Sales Team:</span>
@@ -2140,10 +2246,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
               </div>
 
               {/* Clear filters button if active */}
-              {(selectedProgramFilter !== 'ALL' || selectedSalesTeamFilter !== 'ALL' || teamFilter !== 'ALL') && (
+              {(selectedProgramFilter !== 'ALL' || selectedDocumentTypeFilter !== 'ALL' || selectedSalesTeamFilter !== 'ALL' || teamFilter !== 'ALL') && (
                 <button
                   onClick={() => {
                     setSelectedProgramFilter('ALL');
+                    setSelectedDocumentTypeFilter('ALL');
                     setSelectedSalesTeamFilter('ALL');
                     setTeamFilter('ALL');
                   }}
@@ -2242,6 +2349,22 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                         <span>Program</span>
                         <div className={`transition-all duration-200 ${sortField === 'program' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
                           {sortField === 'program' && sortDirection === 'desc' ? (
+                            <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          ) : (
+                            <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </div>
+                    </th>
+                    <th 
+                      className="px-5 py-3 text-[10px] font-black uppercase text-slate-450 tracking-wider cursor-pointer hover:text-slate-900 dark:hover:text-slate-200 transition-colors group"
+                      onClick={() => handleSort('type_of_document')}
+                      title="Sort by Type of Document"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>Type of Document</span>
+                        <div className={`transition-all duration-200 ${sortField === 'type_of_document' ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'}`}>
+                          {sortField === 'type_of_document' && sortDirection === 'desc' ? (
                             <ArrowDown size={11} className="text-brand-orange" strokeWidth={2.5} />
                           ) : (
                             <ArrowUp size={11} className="text-brand-orange" strokeWidth={2.5} />
@@ -2366,6 +2489,15 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                               {record.program || 'OTHER'}
                             </span>
                           </td>
+                          <td className="px-5 py-4 text-xs">
+                            {record.type_of_document ? (
+                              <span className="px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200/70 dark:border-slate-700/60 shadow-2xs">
+                                {record.type_of_document}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 dark:text-slate-600 font-mono text-[11px]">--</span>
+                            )}
+                          </td>
                           <td className="px-5 py-4 text-xs text-slate-600 dark:text-slate-300 font-semibold">
                             {record.sales_team}
                           </td>
@@ -2453,7 +2585,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                         {/* Expandable designated items details and step tracker (REFER TO IMAGE TIMELINE) */}
                         {isSelected && (
                           <tr>
-                            <td colSpan={9} className="px-6 py-5 bg-slate-50/60 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800">
+                            <td colSpan={11} className="px-6 py-5 bg-slate-50/60 dark:bg-slate-900/40 border-b border-slate-200 dark:border-slate-800">
                               <div className="space-y-6">
                                 
                                 {/* 7-STEP REPLICA VISUAL TIMELINE FROM THE USER IMAGE */}
@@ -2682,7 +2814,7 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                   })}
                   {filteredRecords.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="text-center p-8 text-sm italic text-slate-400">
+                      <td colSpan={11} className="text-center p-8 text-sm italic text-slate-400">
                         No matches found.
                       </td>
                     </tr>
@@ -3987,8 +4119,9 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
           <p className="text-xs text-slate-500 mt-1">
             Generated on {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}
           </p>
-          <div className="flex gap-4 mt-2.5 text-[11px] font-bold text-slate-700">
+          <div className="flex flex-wrap gap-4 mt-2.5 text-[11px] font-bold text-slate-700">
             <div>Program Filter: <span className="text-slate-900">{selectedProgramFilter}</span></div>
+            <div>Doc Type Filter: <span className="text-slate-900">{selectedDocumentTypeFilter}</span></div>
             <div>Sales Team Filter: <span className="text-slate-900">{selectedSalesTeamFilter}</span></div>
             <div>Active Stage: <span className="text-slate-900">{selectedStatusFilter !== null ? `Stage ${selectedStatusFilter}` : 'ALL'}</span></div>
             <div>Total Records: <span className="text-slate-900">{filteredRecords.length}</span></div>
@@ -3998,9 +4131,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
         <table className="w-full border-collapse text-[11px]">
           <thead>
             <tr className="border-b-2 border-slate-400 text-left font-black uppercase tracking-wider text-slate-800">
-              <th className="py-2.5 pr-2">Customer Code</th>
+              <th className="py-2.5 pr-2">School Monitoring ID</th>
+              <th className="py-2.5 px-2">Customer Code</th>
               <th className="py-2.5 px-2">School Name</th>
               <th className="py-2.5 px-2">Program</th>
+              <th className="py-2.5 px-2">Type of Document</th>
               <th className="py-2.5 px-2">Sales Team</th>
               <th className="py-2.5 px-2">Team</th>
               <th className="py-2.5 px-2">Class Opening</th>
@@ -4026,9 +4161,11 @@ export const SchoolMonitoring: React.FC<{ isDarkMode?: boolean; userRole?: strin
                 : 'None';
               return (
                 <tr key={r.id} className="align-top hover:bg-slate-50">
-                  <td className="py-2 pr-2 font-mono font-bold text-slate-700">{r.customer_code}</td>
+                  <td className="py-2 pr-2 font-mono font-bold text-slate-900">{r.school_monitoring_id || '--'}</td>
+                  <td className="py-2 px-2 font-mono font-bold text-slate-700">{r.customer_code}</td>
                   <td className="py-2 px-2 font-extrabold text-slate-900">{r.school_name}</td>
                   <td className="py-2 px-2 font-semibold text-slate-700 uppercase">{r.program || 'OTHER'}</td>
+                  <td className="py-2 px-2 font-bold text-slate-700">{r.type_of_document || '--'}</td>
                   <td className="py-2 px-2 text-slate-700">{r.sales_team}</td>
                   <td className="py-2 px-2 text-slate-700">{r.team ? toTitleCase(r.team) : 'None'}</td>
                   <td className="py-2 px-2 font-mono text-slate-700">{r.class_opening ? formatStepDate(r.class_opening) : '--'}</td>

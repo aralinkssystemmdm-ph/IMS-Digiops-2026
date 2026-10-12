@@ -53,6 +53,7 @@ const SerialNumberEntryPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [deliveredDate, setDeliveredDate] = useState<string>('');
+  const [requestTeam, setRequestTeam] = useState<string>(location.state?.team || 'Aralinks');
   
   // Deliverable Edit & Revert State
   const [deliveryHistory, setDeliveryHistory] = useState<DeliveryHistoryRecord[]>([]);
@@ -146,6 +147,9 @@ const SerialNumberEntryPage: React.FC = () => {
           .single();
 
         if (reqError) throw reqError;
+
+        const resolvedTeam = requestData?.team || (requestData?.request_type === 'SMS-PROTRACK' ? 'Protrack' : (location.state?.team || 'Aralinks'));
+        setRequestTeam(resolvedTeam);
 
         // Fetch latest serialization status from equipment table
         const itemCodes = requestData.request_items.map((i: any) => i.item_code);
@@ -289,15 +293,24 @@ const SerialNumberEntryPage: React.FC = () => {
     try {
       const qtyDiff = qty - originalQty;
       const loc = to_location || 'IT Basement';
+      const teamVal = (requestTeam || 'Aralinks').toLowerCase();
 
       // 1. Update item_location_stocks if quantity changed
       if (qtyDiff !== 0) {
-        const { data: destStock } = await supabase
+        let destQuery = supabase
           .from('item_location_stocks')
-          .select('id, quantity, brand_new_qty')
+          .select('id, quantity, brand_new_qty, team')
           .eq('item_code', code)
-          .eq('location', loc)
-          .maybeSingle();
+          .eq('location', loc);
+
+        if (teamVal) {
+          if (teamVal === 'aralinks') {
+            destQuery = destQuery.or('team.ilike.aralinks,team.is.null');
+          } else {
+            destQuery = destQuery.ilike('team', teamVal);
+          }
+        }
+        const { data: destStock } = await destQuery.maybeSingle();
 
         if (destStock) {
           const newTotal = Math.max(0, (destStock.quantity || 0) + qtyDiff);
@@ -307,6 +320,7 @@ const SerialNumberEntryPage: React.FC = () => {
             .update({ 
               quantity: newTotal,
               brand_new_qty: newBrandNew,
+              team: teamVal || destStock.team,
               updated_at: new Date().toISOString()
             })
             .eq('id', destStock.id);
@@ -320,6 +334,7 @@ const SerialNumberEntryPage: React.FC = () => {
               location: loc,
               quantity: Math.max(0, qtyDiff),
               brand_new_qty: Math.max(0, qtyDiff),
+              team: teamVal,
               updated_at: new Date().toISOString()
             }]);
           if (destInsertError) throw destInsertError;
@@ -385,7 +400,8 @@ const SerialNumberEntryPage: React.FC = () => {
         .update({
           quantity: qty,
           reason: reason || null,
-          created_at: created_at
+          created_at: created_at,
+          team: teamVal
         })
         .eq('id', id);
       if (txErr) throw txErr;
@@ -490,12 +506,21 @@ const SerialNumberEntryPage: React.FC = () => {
       const qtyToRevert = parseInt(String(tx.quantity)) || 0;
 
       // 1. Deduct from item_location_stocks
-      const { data: destStock } = await supabase
+      const teamVal = (tx.team || requestTeam || 'Aralinks').toLowerCase();
+      let destQuery = supabase
         .from('item_location_stocks')
-        .select('id, quantity, brand_new_qty')
+        .select('id, quantity, brand_new_qty, team')
         .eq('item_code', tx.item_code)
-        .eq('location', loc)
-        .maybeSingle();
+        .eq('location', loc);
+
+      if (teamVal) {
+        if (teamVal === 'aralinks') {
+          destQuery = destQuery.or('team.ilike.aralinks,team.is.null');
+        } else {
+          destQuery = destQuery.ilike('team', teamVal);
+        }
+      }
+      const { data: destStock } = await destQuery.maybeSingle();
 
       if (destStock) {
         const newTotal = Math.max(0, (destStock.quantity || 0) - qtyToRevert);
@@ -796,6 +821,8 @@ const SerialNumberEntryPage: React.FC = () => {
       const resolvedDeliveredAt = deliveryDateObj.toISOString();
 
       // 1. Process Non-Serialized Items
+      const teamVal = (requestTeam || 'Aralinks').toLowerCase();
+
       for (const item of nonSerializedItems) {
         if (item.newDeliveryQty > 0) {
           const totalReceived = (item.globalReceivedQty || 0) + item.newDeliveryQty;
@@ -820,23 +847,33 @@ const SerialNumberEntryPage: React.FC = () => {
             reference_id: requestId,
             created_by: currentUser,
             reason: location.state?.selectedPO ? `PO:${location.state.selectedPO} | ${item.remarks || ''}` : item.remarks,
-            created_at: resolvedDeliveredAt
+            created_at: resolvedDeliveredAt,
+            team: teamVal
           }]);
           if (txError) throw txError;
 
           // Update Inventory
-          const { data: destStock } = await supabase
+          let destQuery = supabase
             .from('item_location_stocks')
-            .select('id, quantity, brand_new_qty')
+            .select('id, quantity, brand_new_qty, team')
             .eq('item_code', item.itemCode)
-            .eq('location', item.location)
-            .maybeSingle();
+            .eq('location', item.location);
+
+          if (teamVal) {
+            if (teamVal === 'aralinks') {
+              destQuery = destQuery.or('team.ilike.aralinks,team.is.null');
+            } else {
+              destQuery = destQuery.ilike('team', teamVal);
+            }
+          }
+          const { data: destStock } = await destQuery.maybeSingle();
 
           if (destStock) {
             const { error: destUpdateError } = await supabase.from('item_location_stocks')
               .update({ 
                 quantity: destStock.quantity + item.newDeliveryQty,
-                brand_new_qty: (destStock.brand_new_qty || 0) + item.newDeliveryQty
+                brand_new_qty: (destStock.brand_new_qty || 0) + item.newDeliveryQty,
+                team: teamVal || destStock.team
               })
               .eq('id', destStock.id);
             if (destUpdateError) throw destUpdateError;
@@ -846,7 +883,8 @@ const SerialNumberEntryPage: React.FC = () => {
               item_name: item.description,
               location: item.location,
               quantity: item.newDeliveryQty,
-              brand_new_qty: item.newDeliveryQty
+              brand_new_qty: item.newDeliveryQty,
+              team: teamVal
             }]);
             if (destInsertError) throw destInsertError;
           }
@@ -886,19 +924,28 @@ const SerialNumberEntryPage: React.FC = () => {
           if (updateItemError) throw updateItemError;
 
           // Update Inventory
-          const { data: existingStock } = await supabase
+          let stockQuery = supabase
             .from('item_location_stocks')
-            .select('id, quantity, brand_new_qty')
+            .select('id, quantity, brand_new_qty, team')
             .eq('item_code', entry.itemCode)
-            .eq('location', entry.location)
-            .maybeSingle();
+            .eq('location', entry.location);
+
+          if (teamVal) {
+            if (teamVal === 'aralinks') {
+              stockQuery = stockQuery.or('team.ilike.aralinks,team.is.null');
+            } else {
+              stockQuery = stockQuery.ilike('team', teamVal);
+            }
+          }
+          const { data: existingStock } = await stockQuery.maybeSingle();
 
           if (existingStock) {
             const { error: stockError } = await supabase
               .from('item_location_stocks')
               .update({ 
                 quantity: existingStock.quantity + entry.quantity,
-                brand_new_qty: (existingStock.brand_new_qty || 0) + entry.quantity
+                brand_new_qty: (existingStock.brand_new_qty || 0) + entry.quantity,
+                team: teamVal || existingStock.team
               })
               .eq('id', existingStock.id);
             if (stockError) throw stockError;
@@ -910,7 +957,8 @@ const SerialNumberEntryPage: React.FC = () => {
                 item_name: entry.description,
                 location: entry.location,
                 quantity: entry.quantity,
-                brand_new_qty: entry.quantity
+                brand_new_qty: entry.quantity,
+                team: teamVal
               }]);
             if (stockError) throw stockError;
           }
@@ -926,7 +974,8 @@ const SerialNumberEntryPage: React.FC = () => {
               reference_id: requestId,
               created_by: currentUser,
               reason: location.state?.selectedPO ? `PO:${location.state.selectedPO} | ${entry.remarks || ''}` : entry.remarks,
-              created_at: resolvedDeliveredAt
+              created_at: resolvedDeliveredAt,
+              team: teamVal
             }]);
           if (txError) throw txError;
         }
@@ -1015,17 +1064,28 @@ const SerialNumberEntryPage: React.FC = () => {
               }`}>
                 Receive Items & Assign Serials
               </h1>
-              <div className={`flex items-center gap-4 transition-all duration-300 ${isScrolled ? 'mt-0' : 'mt-1'}`}>
+              <div className={`flex items-center gap-3 transition-all duration-300 ${isScrolled ? 'mt-0' : 'mt-1'}`}>
                 <span className={`font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest transition-all duration-300 ${
                   isScrolled ? 'text-[8px]' : 'text-xs'
                 }`}>
                   Request ID: <span className="text-brand-orange">{requestId}</span>
                   {location.state?.selectedPO && (
-                    <span className="ml-4">
+                    <span className="ml-3">
                       PO NO: <span className="text-[#2563EB]">{location.state.selectedPO}</span>
                     </span>
                   )}
                 </span>
+                {requestTeam && (
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full font-black uppercase tracking-wider ${
+                    isScrolled ? 'text-[7px]' : 'text-[9px]'
+                  } ${
+                    requestTeam.toLowerCase() === 'protrack'
+                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/40'
+                      : 'bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/40'
+                  }`}>
+                    {toTitleCase(requestTeam)}
+                  </span>
+                )}
               </div>
             </div>
           </div>

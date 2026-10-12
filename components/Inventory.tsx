@@ -237,11 +237,7 @@ const Inventory: React.FC<InventoryProps> = ({
 
       const { data: txData } = await supabase
         .from('stock_transactions')
-        .select('item_code');
-
-      const { data, error } = await supabase
-        .from('view_inventory_summary')
-        .select('*');
+        .select('item_code, team');
 
       if (locStocksData) {
         setAllLocationStocks(locStocksData);
@@ -259,89 +255,131 @@ const Inventory: React.FC<InventoryProps> = ({
       }
 
       const txCodesSet = new Set<string>();
+      const txTeamsByCode = new Map<string, Set<string>>();
       if (txData) {
         txData.forEach((t: any) => {
           if (t.item_code) {
-            txCodesSet.add(t.item_code.trim().toUpperCase());
+            const cUpper = t.item_code.trim().toUpperCase();
+            txCodesSet.add(cUpper);
+            if (t.team) {
+              const lower = t.team.trim().toLowerCase();
+              const teamDisplay = lower === 'protrack' ? 'Protrack' : 'Aralinks';
+              if (!txTeamsByCode.has(cUpper)) txTeamsByCode.set(cUpper, new Set());
+              txTeamsByCode.get(cUpper)!.add(teamDisplay);
+            }
           }
         });
       }
 
-      if (error && !data && (!equipData || equipData.length === 0)) throw error;
+      // Helper to normalize team
+      const normalizeTeam = (rawTeam?: string | null): { norm: string; display: string } => {
+        if (!rawTeam || !rawTeam.trim()) {
+          return { norm: 'aralinks', display: 'Aralinks' };
+        }
+        const trimmed = rawTeam.trim();
+        const lower = trimmed.toLowerCase();
+        if (lower === 'aralinks') return { norm: 'aralinks', display: 'Aralinks' };
+        if (lower === 'protrack') return { norm: 'protrack', display: 'Protrack' };
+        return { norm: lower, display: toTitleCase(trimmed) };
+      };
 
-      const summaryMap = new Map<string, any>();
-      if (data) {
-        data.forEach((row: any) => {
-          if (row.item_code) {
-            summaryMap.set(row.item_code.trim().toUpperCase(), row);
-          }
+      // 1. Map of equipment by uppercase item_code
+      const equipMap = new Map<string, any>();
+      if (equipData) {
+        equipData.forEach((equip: any) => {
+          const codeUpper = (equip.item_code || '').trim().toUpperCase();
+          if (codeUpper) equipMap.set(codeUpper, equip);
         });
       }
 
-      const teamMap = new Map<string, string>();
+      // 2. Group locStocksData by (item_code, team) so separate teams for same item code have separate rows, qty, and locations
+      interface TeamStockGroup {
+        item_code: string;
+        code_upper: string;
+        item_name: string;
+        team_norm: string;
+        team_display: string;
+        total_quantity: number;
+      }
+
+      const stockGroups = new Map<string, TeamStockGroup>();
+      const codesWithStock = new Set<string>();
+
       if (locStocksData) {
         locStocksData.forEach((row: any) => {
-          if (row.item_code && row.team) {
-            teamMap.set(row.item_code.trim().toUpperCase(), row.team);
+          const code = (row.item_code || '').trim();
+          if (!code) return;
+          const codeUpper = code.toUpperCase();
+          const { norm: teamNorm, display: teamDisplay } = normalizeTeam(row.team);
+          const key = `${codeUpper}:::${teamNorm}`;
+          codesWithStock.add(codeUpper);
+
+          const qty = Number(row.quantity) || 0;
+          const existing = stockGroups.get(key);
+          if (existing) {
+            existing.total_quantity += qty;
+            if (!existing.item_name && row.item_name) {
+              existing.item_name = row.item_name;
+            }
+          } else {
+            stockGroups.set(key, {
+              item_code: code,
+              code_upper: codeUpper,
+              item_name: row.item_name || code,
+              team_norm: teamNorm,
+              team_display: teamDisplay,
+              total_quantity: qty
+            });
           }
         });
       }
 
       const combinedData: InventoryItem[] = [];
-      const processedCodes = new Set<string>();
 
+      // 3. Add all stock groups (same item code with different teams are separate rows)
+      stockGroups.forEach((grp) => {
+        const equip = equipMap.get(grp.code_upper);
+        const critLevel = equip?.critical_level ?? 0;
+        const totalQty = grp.total_quantity;
+        const isSerialized = Boolean(equip?.is_serialized);
+        const hasSerials = serialCodesSet.has(grp.code_upper) && totalQty > 0;
+        const hasHistory = totalQty > 0 || txCodesSet.has(grp.code_upper);
+
+        combinedData.push({
+          item_code: equip?.item_code || grp.item_code,
+          item_name: equip?.description || grp.item_name || grp.item_code,
+          total_quantity: totalQty,
+          critical_level: critLevel,
+          status: totalQty <= critLevel ? 'Critical' : 'Available',
+          is_serialized: isSerialized,
+          has_serials: hasSerials,
+          has_history: hasHistory,
+          team: grp.team_display
+        });
+      });
+
+      // 4. Add equipment catalog items that don't have any stocks yet (0 total_quantity)
       if (equipData) {
         equipData.forEach((equip: any) => {
           const codeUpper = (equip.item_code || '').trim().toUpperCase();
-          if (!codeUpper) return;
-          processedCodes.add(codeUpper);
+          if (!codeUpper || codesWithStock.has(codeUpper)) return;
 
-          const summaryRow = summaryMap.get(codeUpper);
-          const itemTeam = teamMap.get(codeUpper) || undefined;
-          const totalQty = summaryRow ? (summaryRow.total_quantity || 0) : 0;
-          const critLevel = summaryRow?.critical_level ?? equip.critical_level ?? 0;
-          const hasTx = txCodesSet.has(codeUpper);
-          const hasSerials = serialCodesSet.has(codeUpper) && totalQty > 0;
-          const hasHistory = totalQty > 0 || hasTx;
+          const teamsSet = txTeamsByCode.get(codeUpper);
+          const teamsToAdd = teamsSet && teamsSet.size > 0 ? Array.from(teamsSet) : ['Aralinks'];
 
-          combinedData.push({
-            item_code: equip.item_code,
-            item_name: summaryRow?.item_name || equip.description || equip.item_code,
-            total_quantity: totalQty,
-            critical_level: critLevel,
-            status: totalQty <= critLevel ? 'Critical' : 'Available',
-            is_serialized: equip.is_serialized || summaryRow?.is_serialized || false,
-            has_serials: hasSerials,
-            has_history: hasHistory,
-            team: itemTeam
-          });
-        });
-      }
-
-      if (data) {
-        data.forEach((summaryRow: any) => {
-          const codeUpper = (summaryRow.item_code || '').trim().toUpperCase();
-          if (codeUpper && !processedCodes.has(codeUpper)) {
-            processedCodes.add(codeUpper);
-            const itemTeam = teamMap.get(codeUpper) || undefined;
-            const totalQty = summaryRow.total_quantity || 0;
-            const critLevel = summaryRow.critical_level || 0;
-            const hasTx = txCodesSet.has(codeUpper);
-            const hasSerials = serialCodesSet.has(codeUpper) && totalQty > 0;
-            const hasHistory = totalQty > 0 || hasTx;
-
+          teamsToAdd.forEach(teamDisplay => {
             combinedData.push({
-              item_code: summaryRow.item_code,
-              item_name: summaryRow.item_name || summaryRow.item_code,
-              total_quantity: totalQty,
-              critical_level: critLevel,
-              status: totalQty <= critLevel ? 'Critical' : 'Available',
-              is_serialized: summaryRow.is_serialized || false,
-              has_serials: hasSerials,
-              has_history: hasHistory,
-              team: itemTeam
+              item_code: equip.item_code,
+              item_name: equip.description || equip.item_code,
+              total_quantity: 0,
+              critical_level: equip.critical_level || 0,
+              status: 'Critical',
+              is_serialized: Boolean(equip.is_serialized),
+              has_serials: false,
+              has_history: txCodesSet.has(codeUpper),
+              team: teamDisplay
             });
-          }
+          });
         });
       }
 
@@ -350,6 +388,10 @@ const Inventory: React.FC<InventoryProps> = ({
         const valB = (b[sortField] || '').toString().toLowerCase();
         if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
         if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        const teamA = (a.team || '').toLowerCase();
+        const teamB = (b.team || '').toLowerCase();
+        if (teamA < teamB) return -1;
+        if (teamA > teamB) return 1;
         return 0;
       });
 
@@ -414,7 +456,7 @@ const Inventory: React.FC<InventoryProps> = ({
       const txs = txRes.data || [];
       const stocks = stockRes.data || [];
 
-      // Compute net quantity per item_code and location from transactions ledger
+      // Compute net quantity per item_code, location, and team from transactions ledger
       const computed: Record<string, number> = {};
       for (const tx of txs) {
         const qty = parseInt(tx.quantity) || 0;
@@ -422,28 +464,29 @@ const Inventory: React.FC<InventoryProps> = ({
         const toLoc = (tx.to_location || tx.location || '').trim();
         const fromLoc = (tx.from_location || '').trim();
         const code = (tx.item_code || '').trim();
+        const teamVal = (tx.team ? tx.team.trim() : 'aralinks').toLowerCase();
 
         if (!code) continue;
 
         if (type === 'Transfer') {
           if (fromLoc) {
-            const kFrom = `${code}:::${fromLoc}`;
+            const kFrom = `${code}:::${fromLoc}:::${teamVal}`;
             computed[kFrom] = (computed[kFrom] || 0) - qty;
           }
           if (toLoc) {
-            const kTo = `${code}:::${toLoc}`;
+            const kTo = `${code}:::${toLoc}:::${teamVal}`;
             computed[kTo] = (computed[kTo] || 0) + qty;
           }
         } else if (['Dispatch', 'Out', 'Reduction', 'Pullout'].includes(type)) {
           const loc = fromLoc || toLoc;
           if (loc) {
-            const k = `${code}:::${loc}`;
+            const k = `${code}:::${loc}:::${teamVal}`;
             computed[k] = (computed[k] || 0) - qty;
           }
         } else {
           // Delivery, Initial Stock, In, Addition, Return, Adjustment
           if (toLoc) {
-            const k = `${code}:::${toLoc}`;
+            const k = `${code}:::${toLoc}:::${teamVal}`;
             computed[k] = (computed[k] || 0) + qty;
           }
         }
@@ -451,7 +494,8 @@ const Inventory: React.FC<InventoryProps> = ({
 
       let correctedCount = 0;
       for (const s of stocks) {
-        const k = `${s.item_code.trim()}:::${s.location.trim()}`;
+        const sTeam = (s.team ? s.team.trim() : 'aralinks').toLowerCase();
+        const k = `${s.item_code.trim()}:::${s.location.trim()}:::${sTeam}`;
         const expected = computed[k] !== undefined ? computed[k] : 0;
         if (s.quantity !== expected) {
           const diff = expected - s.quantity;
@@ -481,15 +525,25 @@ const Inventory: React.FC<InventoryProps> = ({
     }
   };
 
-  const fetchLocationBreakdown = useCallback(async (itemCode: string) => {
+  const fetchLocationBreakdown = useCallback(async (itemCode: string, team?: string) => {
     setLoadingLocations(true);
     setExpandedLoc(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('item_location_stocks')
-        .select('location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty')
-        .eq('item_code', itemCode)
-        .order('quantity', { ascending: false });
+        .select('location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty, team')
+        .eq('item_code', itemCode);
+
+      if (team) {
+        const teamLower = team.trim().toLowerCase();
+        if (teamLower === 'aralinks') {
+          query = query.or('team.ilike.aralinks,team.is.null');
+        } else {
+          query = query.ilike('team', teamLower);
+        }
+      }
+
+      const { data, error } = await query.order('quantity', { ascending: false });
 
       if (error) throw error;
       if (data) {
@@ -538,7 +592,7 @@ const Inventory: React.FC<InventoryProps> = ({
           fetchInventoryData(false);
           // Also refresh breakdown if open
           if (isLocationModalOpen && selectedItem) {
-            fetchLocationBreakdown(selectedItem.item_code);
+            fetchLocationBreakdown(selectedItem.item_code, selectedItem.team);
           }
         }
       )
@@ -605,7 +659,7 @@ const Inventory: React.FC<InventoryProps> = ({
 
   const handleViewLocations = (item: InventoryItem) => {
     setSelectedItem(item);
-    fetchLocationBreakdown(item.item_code);
+    fetchLocationBreakdown(item.item_code, item.team);
     setIsLocationModalOpen(true);
   };
 
@@ -643,7 +697,12 @@ const Inventory: React.FC<InventoryProps> = ({
         let filteredQty = item.total_quantity;
         
         if (locationFilter !== 'All Locations' || conditionFilter !== 'All Conditions') {
-          const itemStocks = allLocationStocks.filter(s => s.item_code === item.item_code);
+          const itemTeamNorm = (item.team || 'aralinks').toLowerCase();
+          const itemStocks = allLocationStocks.filter(s => {
+            if (s.item_code !== item.item_code) return false;
+            const stockTeamNorm = (s.team || 'aralinks').toLowerCase();
+            return stockTeamNorm === itemTeamNorm;
+          });
           
           let sum = 0;
           itemStocks.forEach(s => {
@@ -694,7 +753,7 @@ const Inventory: React.FC<InventoryProps> = ({
 
         return matchesSearch && matchesStatus && matchesTeam;
       });
-  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks, teamFilter, userTeam, userRole]);
+  }, [inventoryData, searchQuery, statusFilter, locationFilter, conditionFilter, allLocationStocks, teamFilter, userTeam, userRole, poMatchItemCodes]);
 
   const handleSort = (field: 'item_code' | 'item_name') => {
     if (sortField === field) {
@@ -755,7 +814,7 @@ const Inventory: React.FC<InventoryProps> = ({
       const [locResponse, equipResponse, txResponse, serialsResponse] = await Promise.all([
         supabase
           .from('item_location_stocks')
-          .select('item_code, location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty')
+          .select('item_code, location, quantity, brand_new_qty, used_qty, defective_qty, disposal_qty, team')
           .in('item_code', itemCodes),
         supabase
           .from('equipment')
@@ -774,11 +833,13 @@ const Inventory: React.FC<InventoryProps> = ({
 
       if (!locResponse.error && locResponse.data) {
         locResponse.data.forEach(row => {
-          if (!locationBreakdownMap[row.item_code]) {
-            locationBreakdownMap[row.item_code] = {};
+          const tNorm = (row.team ? row.team.trim() : 'aralinks').toLowerCase();
+          const key = `${row.item_code}:::${tNorm}`;
+          if (!locationBreakdownMap[key]) {
+            locationBreakdownMap[key] = {};
           }
           const locName = row.location.trim();
-          locationBreakdownMap[row.item_code][locName] = {
+          locationBreakdownMap[key][locName] = {
             brand_new: row.brand_new_qty || 0,
             used: row.used_qty || 0,
             defective: row.defective_qty || 0,
@@ -862,6 +923,7 @@ const Inventory: React.FC<InventoryProps> = ({
     const headers = [
       "Item Code", 
       "Item Description", 
+      "Team",
       "UOM",
       "Total Qty", 
       "IT Basement - Brand New",
@@ -924,7 +986,8 @@ const Inventory: React.FC<InventoryProps> = ({
     // Add data rows
     filteredData.forEach(item => {
       const itemCode = item.item_code || 'N/A';
-      const itemLocs = locationBreakdownMap[itemCode] || {};
+      const itemTeamNorm = (item.team ? item.team.trim() : 'aralinks').toLowerCase();
+      const itemLocs = locationBreakdownMap[`${itemCode}:::${itemTeamNorm}`] || {};
       
       const itBasement = itemLocs["IT Basement"] || { brand_new: 0, used: 0, defective: 0, disposal: 0 };
       const areysWarehouse = itemLocs["Areys Warehouse"] || { brand_new: 0, used: 0, defective: 0, disposal: 0 };
@@ -934,6 +997,7 @@ const Inventory: React.FC<InventoryProps> = ({
       const rowData = [
         itemCode,
         item.item_name || 'N/A',
+        item.team ? toTitleCase(item.team) : 'N/A',
         uomMap[itemCode] || 'N/A',
         item.total_quantity || 0,
         itBasement.brand_new,
@@ -1373,7 +1437,7 @@ const Inventory: React.FC<InventoryProps> = ({
                   
                   return (
                     <tr 
-                      key={`${item.item_code}-${i}`} 
+                      key={`${item.item_code}-${item.team || 'none'}-${i}`} 
                       className={`group animate-ease-in-down transition-all duration-200 border-l-4 border-transparent hover:-translate-y-[2px] hover:shadow-lg ${
                         isCritical ? (isDarkMode ? 'bg-red-500/5' : 'bg-red-50/50') : ''
                       } ${isDarkMode ? 'hover:bg-slate-800/50' : 'hover:bg-slate-50'}`}
@@ -1578,7 +1642,20 @@ const Inventory: React.FC<InventoryProps> = ({
             <div className="flex items-center justify-between mb-8">
               <div>
                 <h3 className={`text-2xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Location Breakdown</h3>
-                <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-1.5">{selectedItem.item_name}</p>
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{selectedItem.item_name} ({selectedItem.item_code})</p>
+                  {selectedItem.team && (
+                    <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider ${
+                      selectedItem.team.toLowerCase() === 'aralinks' 
+                        ? (isDarkMode ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' : 'bg-blue-50 text-blue-600 border border-blue-200')
+                        : selectedItem.team.toLowerCase() === 'protrack'
+                        ? (isDarkMode ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-purple-50 text-purple-600 border border-purple-200')
+                        : (isDarkMode ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-500')
+                    }`}>
+                      {toTitleCase(selectedItem.team)}
+                    </span>
+                  )}
+                </div>
               </div>
               <button onClick={() => setIsLocationModalOpen(false)} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
                 <X size={28} />

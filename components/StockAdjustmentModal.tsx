@@ -12,6 +12,7 @@ interface StockAdjustmentModalProps {
   item: {
     item_code: string;
     item_name: string;
+    team?: string;
   };
   mode: 'add' | 'adjust';
   isDarkMode?: boolean;
@@ -96,6 +97,8 @@ const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({ isOpen, onC
     try {
       const currentUser = localStorage.getItem('aralinks_user') || 'System';
 
+      const teamVal = item.team ? item.team.toLowerCase() : null;
+
       // 1. Record Transaction
       const { error: txError } = await supabase
         .from('stock_transactions')
@@ -105,7 +108,8 @@ const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({ isOpen, onC
           quantity: qtyNum,
           transaction_type: mode === 'add' ? 'Restock' : 'Adjustment',
           reason: mode === 'adjust' ? reason : undefined,
-          created_by: currentUser
+          created_by: currentUser,
+          team: teamVal
         }]);
 
       if (txError) throw txError;
@@ -114,17 +118,30 @@ const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({ isOpen, onC
       const isMainSource = selectedLocation.toLowerCase().includes('warehouse') || selectedLocation === 'IT Basement';
       const finalQtyChange = (isMainSource && qtyNum < 0) ? 0 : qtyNum;
 
-      const { data: existingStock } = await supabase
+      let existingStockQuery = supabase
         .from('item_location_stocks')
-        .select('id, quantity')
+        .select('id, quantity, team')
         .eq('item_code', item.item_code)
-        .eq('location', selectedLocation)
-        .maybeSingle();
+        .eq('location', selectedLocation);
+
+      if (teamVal) {
+        if (teamVal === 'aralinks') {
+          existingStockQuery = existingStockQuery.or('team.ilike.aralinks,team.is.null');
+        } else {
+          existingStockQuery = existingStockQuery.ilike('team', teamVal);
+        }
+      } else {
+        existingStockQuery = existingStockQuery.is('team', null);
+      }
+      const { data: existingStock } = await existingStockQuery.maybeSingle();
 
       if (existingStock) {
         const { error: updateError } = await supabase
           .from('item_location_stocks')
-          .update({ quantity: Math.max(0, existingStock.quantity + finalQtyChange) })
+          .update({ 
+            quantity: Math.max(0, existingStock.quantity + finalQtyChange),
+            team: teamVal || existingStock.team
+          })
           .eq('id', existingStock.id);
         if (updateError) throw updateError;
       } else {
@@ -134,7 +151,8 @@ const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({ isOpen, onC
             item_code: item.item_code,
             item_name: item.item_name,
             location: selectedLocation,
-            quantity: Math.max(0, finalQtyChange)
+            quantity: Math.max(0, finalQtyChange),
+            team: teamVal
           }]);
         if (insertError) throw insertError;
       }

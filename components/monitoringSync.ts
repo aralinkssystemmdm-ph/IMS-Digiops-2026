@@ -172,14 +172,20 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
       let itemReceivedStatus = record.item_received_status || '';
       const updatedDates = { ...record.status_dates };
 
-      // 1. Match by school_monitoring_id / school_name in item_requests (Stage 3 & Stage 4)
+      // 1. Match by school_monitoring_id in item_requests (Stage 3 & Stage 4)
       const matchedIRs = itemRequestsList.filter(ir => {
-        const matchId = record.school_monitoring_id && ir.school_monitoring_id && 
-          ir.school_monitoring_id.trim().toUpperCase() === record.school_monitoring_id.trim().toUpperCase();
-        const matchName = schoolName && ir.school_name && 
-          ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase();
         const isNotCancelled = ir.status !== 'Cancelled' && ir.status !== 'Deleted' && ir.status !== 'Rejected';
-        return (matchId || matchName) && isNotCancelled;
+        if (!isNotCancelled) return false;
+
+        const irSmId = (ir.school_monitoring_id || '').trim().toUpperCase();
+        const recSmId = (record.school_monitoring_id || '').trim().toUpperCase();
+
+        if (irSmId || recSmId) {
+          return irSmId === recSmId;
+        }
+
+        return Boolean(schoolName && ir.school_name && 
+          ir.school_name.trim().toLowerCase() === schoolName.trim().toLowerCase());
       });
 
       if (matchedIRs.length > 0) {
@@ -230,7 +236,7 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
           }
         }
       } else if (updatedDates[3]) {
-        // Clear automated creation date if all item requests are cancelled or none exist
+        // Clear automated creation date if no matching item requests exist for this school monitoring ID
         updatedDates[3] = '';
         recordChanged = true;
         let newHighest = 1;
@@ -248,66 +254,109 @@ export const syncSchoolMonitoringWithDRs = async (overrideDRs?: any[]) => {
         highestStatus = Math.max(highestStatus, 5);
       }
 
-      // 2. Match by delivery receipts (Stage 6 In transit & Stage 7 Delivered)
-      if (schoolName) {
-        const schoolReceipts = receipts.filter(r => 
-          (r.schoolName && r.schoolName.trim().toLowerCase() === schoolName.trim().toLowerCase()) ||
-          (r.clientCode && record.customer_code && r.clientCode.trim().toLowerCase() === record.customer_code.trim().toLowerCase()) ||
-          (r.schoolMonitoringId && record.school_monitoring_id && r.schoolMonitoringId.trim().toLowerCase() === record.school_monitoring_id.trim().toLowerCase()) ||
-          (r.school_monitoring_id && record.school_monitoring_id && r.school_monitoring_id.trim().toLowerCase() === record.school_monitoring_id.trim().toLowerCase())
+      // 2. Match strictly by school_monitoring_id in delivery receipts (Stage 6 In transit & Stage 7 Delivered)
+      const schoolReceipts = receipts.filter(r => {
+        const rSmId = (r.schoolMonitoringId || r.school_monitoring_id || '').trim().toUpperCase();
+        const recSmId = (record.school_monitoring_id || '').trim().toUpperCase();
+
+        if (rSmId || recSmId) {
+          return rSmId === recSmId;
+        }
+
+        const matchSchool = Boolean(
+          schoolName && 
+          r.schoolName && 
+          r.schoolName.trim().toLowerCase() === schoolName.trim().toLowerCase()
         );
+        const matchClient = Boolean(
+          record.customer_code && 
+          r.clientCode && 
+          r.clientCode.trim().toLowerCase() === record.customer_code.trim().toLowerCase()
+        );
+        return matchSchool || matchClient;
+      });
 
-        if (schoolReceipts.length > 0) {
-          let inTransitDate = '';
-          let deliveredDate = '';
+      let inTransitDate = '';
+      let deliveredDate = '';
 
-          const transitDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'in transit' || r.status?.toLowerCase() === 'partially delivered' || r.status?.toLowerCase() === 'delivered');
-          if (transitDRs.length > 0) {
-            const latestTransit = transitDRs.reduce((latest, r) => {
-              const curDate = r.inTransitDate || r.date || '';
-              return (!latest || curDate > latest) ? curDate : latest;
-            }, '');
-            if (latestTransit) inTransitDate = latestTransit;
-          }
+      const transitDRs = schoolReceipts.filter(r => 
+        r.status?.toLowerCase() === 'in transit' || 
+        r.status?.toLowerCase() === 'partially delivered' || 
+        r.status?.toLowerCase() === 'delivered'
+      );
+      if (transitDRs.length > 0) {
+        const latestTransit = transitDRs.reduce((latest, r) => {
+          const curDate = r.inTransitDate || r.date || '';
+          return (!latest || curDate > latest) ? curDate : latest;
+        }, '');
+        if (latestTransit) inTransitDate = latestTransit;
+      }
 
-          const deliveredDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'delivered');
-          if (deliveredDRs.length > 0) {
-            highestStatus = 7;
-            const latestDelivered = deliveredDRs.reduce((latest, r) => {
-              const curDate = r.deliveredDate || r.date || '';
-              return (!latest || curDate > latest) ? curDate : latest;
-            }, '');
-            if (latestDelivered) deliveredDate = latestDelivered;
-          } else if (transitDRs.length > 0) {
-            highestStatus = Math.max(highestStatus, 6);
-          }
+      const deliveredDRs = schoolReceipts.filter(r => r.status?.toLowerCase() === 'delivered');
+      if (deliveredDRs.length > 0) {
+        const latestDelivered = deliveredDRs.reduce((latest, r) => {
+          const curDate = r.deliveredDate || r.date || '';
+          return (!latest || curDate > latest) ? curDate : latest;
+        }, '');
+        if (latestDelivered) deliveredDate = latestDelivered;
+      }
 
-          const latestTargetDR = schoolReceipts
-            .filter(r => r.targetDeliveryDate)
-            .reduce((latest, r) => (!latest || r.date > latest.date) ? r : latest, null as any);
+      const latestTargetDR = schoolReceipts
+        .filter(r => r.targetDeliveryDate)
+        .reduce((latest, r) => (!latest || r.date > latest.date) ? r : latest, null as any);
 
-          if (latestTargetDR && latestTargetDR.targetDeliveryDate && record.target_deployment_date !== latestTargetDR.targetDeliveryDate) {
-            targetDeploymentDate = latestTargetDR.targetDeliveryDate;
-            recordChanged = true;
-          }
+      if (latestTargetDR && latestTargetDR.targetDeliveryDate && record.target_deployment_date !== latestTargetDR.targetDeliveryDate) {
+        targetDeploymentDate = latestTargetDR.targetDeliveryDate;
+        recordChanged = true;
+      }
 
-          if (highestStatus >= 6) {
-            const finalTransitDate = inTransitDate || new Date().toISOString().split('T')[0];
-            if (updatedDates[6] !== finalTransitDate) {
-              updatedDates[6] = finalTransitDate;
-              recordChanged = true;
-            }
+      if (deliveredDRs.length > 0) {
+        highestStatus = 7;
+        const finalDelDate = deliveredDate || inTransitDate || new Date().toISOString().split('T')[0];
+        const finalTransitDate = inTransitDate || finalDelDate;
+        if (updatedDates[6] !== finalTransitDate) {
+          updatedDates[6] = finalTransitDate;
+          recordChanged = true;
+        }
+        if (updatedDates[7] !== finalDelDate) {
+          updatedDates[7] = finalDelDate;
+          recordChanged = true;
+        }
+      } else if (transitDRs.length > 0) {
+        highestStatus = Math.max(highestStatus, 6);
+        const finalTransitDate = inTransitDate || new Date().toISOString().split('T')[0];
+        if (updatedDates[6] !== finalTransitDate) {
+          updatedDates[6] = finalTransitDate;
+          recordChanged = true;
+        }
+        if (updatedDates[7]) {
+          updatedDates[7] = '';
+          recordChanged = true;
+        }
+      } else {
+        // No matching delivery receipt for this specific school monitoring ID!
+        if (updatedDates[6]) {
+          updatedDates[6] = '';
+          recordChanged = true;
+        }
+        if (updatedDates[7]) {
+          updatedDates[7] = '';
+          recordChanged = true;
+        }
+        // Recalculate status back to the actual attained stage (1 to 5)
+        let baseStatus = 1;
+        for (let s = 5; s >= 1; s--) {
+          if (updatedDates[s as keyof typeof updatedDates]) {
+            baseStatus = s;
+            break;
           }
-          if (highestStatus >= 7) {
-            const finalDelDate = deliveredDate || inTransitDate || new Date().toISOString().split('T')[0];
-            if (updatedDates[7] !== finalDelDate) {
-              updatedDates[7] = finalDelDate;
-              recordChanged = true;
-            }
-          }
-          if (highestStatus !== record.status) {
-            recordChanged = true;
-          }
+        }
+        if (record.status && record.status <= 5) {
+          baseStatus = Math.max(baseStatus, record.status);
+        }
+        if (highestStatus !== baseStatus) {
+          highestStatus = baseStatus;
+          recordChanged = true;
         }
       }
 

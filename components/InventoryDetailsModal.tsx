@@ -13,6 +13,7 @@ interface InventoryDetailsModalProps {
     item_name: string;
     total_quantity: number;
     status: string;
+    team?: string;
   };
   isDarkMode?: boolean;
   userRole?: string | null;
@@ -30,6 +31,7 @@ interface Transaction {
   reason?: string;
   serial_numbers?: string[];
   condition?: string;
+  team?: string;
 }
 
 const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, onClose, onUpdate, item, isDarkMode = false, userRole = 'Staff' }) => {
@@ -481,11 +483,21 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
     if (!isSupabaseConfigured || !item?.item_code) return;
     setLoading(true);
     try {
-      const { data: txData, error: txError } = await supabase
+      let txQuery = supabase
         .from('stock_transactions')
         .select('*')
-        .eq('item_code', item.item_code)
-        .order('created_at', { ascending: false });
+        .eq('item_code', item.item_code);
+
+      if (item.team) {
+        const teamLower = item.team.trim().toLowerCase();
+        if (teamLower === 'aralinks') {
+          txQuery = txQuery.or('team.ilike.aralinks,team.is.null');
+        } else {
+          txQuery = txQuery.ilike('team', teamLower);
+        }
+      }
+
+      const { data: txData, error: txError } = await txQuery.order('created_at', { ascending: false });
 
       if (txError) throw txError;
 
@@ -592,8 +604,22 @@ const InventoryDetailsModal: React.FC<InventoryDetailsModalProps> = ({ isOpen, o
             </div>
             <div>
               <h3 className={`text-2xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>{item.item_name}</h3>
-              <div className="flex items-center gap-3 mt-1">
+              <div className="flex items-center gap-3 mt-1 flex-wrap">
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{item.item_code}</span>
+                {item.team && (
+                  <>
+                    <div className={`w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-700`} />
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                      item.team.toLowerCase() === 'aralinks'
+                        ? 'bg-blue-500/10 text-blue-500 border border-blue-500/20'
+                        : item.team.toLowerCase() === 'protrack'
+                        ? 'bg-purple-500/10 text-purple-500 border border-purple-500/20'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {toTitleCase(item.team)}
+                    </span>
+                  </>
+                )}
                 <div className={`w-1 h-1 rounded-full bg-slate-300 dark:bg-slate-700`} />
                 <span className={`text-[10px] font-black tracking-widest uppercase ${item.status === 'Critical' ? 'text-red-500' : 'text-emerald-500'}`}>
                   {item.status}

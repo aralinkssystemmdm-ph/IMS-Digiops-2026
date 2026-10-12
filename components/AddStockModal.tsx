@@ -448,13 +448,24 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onSucces
 
       // Perform updates for each location
       for (const entry of processedLocations) {
-        // 1. Check if stock already exists
-        const { data: existingStock } = await supabase
+        // 1. Check if stock already exists for this team and location
+        const teamVal = selectedTeam ? selectedTeam.toLowerCase() : null;
+        let existingStockQuery = supabase
           .from('item_location_stocks')
           .select('*')
           .eq('item_code', selectedItem.item_code)
-          .eq('location', entry.location)
-          .maybeSingle();
+          .eq('location', entry.location);
+
+        if (teamVal) {
+          if (teamVal === 'aralinks') {
+            existingStockQuery = existingStockQuery.or('team.ilike.aralinks,team.is.null');
+          } else {
+            existingStockQuery = existingStockQuery.ilike('team', teamVal);
+          }
+        } else {
+          existingStockQuery = existingStockQuery.is('team', null);
+        }
+        const { data: existingStock } = await existingStockQuery.maybeSingle();
 
         const generatedRef = `INIT-${Math.floor(100000 + Math.random() * 900000)}`;
 

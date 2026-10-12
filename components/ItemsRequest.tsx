@@ -674,7 +674,8 @@ const RequestDetailsSidebar: React.FC<RequestDetailsSidebarProps> = ({
                           navigate(`/requests/${request.id}/serial-entry`, { 
                             state: { 
                               selectedPO: po.poNum || null,
-                              poItems: Object.keys(poItemsMap).length > 0 ? poItemsMap : null
+                              poItems: Object.keys(poItemsMap).length > 0 ? poItemsMap : null,
+                              team: request.team || (request.requestType === 'SMS-PROTRACK' ? 'Protrack' : 'Aralinks')
                             } 
                           });
                           onClose();
@@ -2087,12 +2088,20 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
             for (const tx of transactions) {
               // Only reverse Deliveries for inventory cleanup
               if (tx.transaction_type === 'Delivery') {
-                const { data: stock } = await supabase
+                let stockQuery = supabase
                   .from('item_location_stocks')
-                  .select('id, quantity, brand_new_qty')
+                  .select('id, quantity, brand_new_qty, team')
                   .eq('item_code', tx.item_code)
-                  .eq('location', tx.to_location)
-                  .maybeSingle();
+                  .eq('location', tx.to_location);
+
+                if (tx.team) {
+                  if (tx.team.toLowerCase() === 'aralinks') {
+                    stockQuery = stockQuery.or('team.ilike.aralinks,team.is.null');
+                  } else {
+                    stockQuery = stockQuery.ilike('team', tx.team.toLowerCase());
+                  }
+                }
+                const { data: stock } = await stockQuery.maybeSingle();
 
                 if (stock) {
                   await supabase
@@ -2154,12 +2163,20 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
       if (transactions && transactions.length > 0) {
         for (const tx of transactions) {
           if (tx.transaction_type === 'Delivery') {
-            const { data: stock } = await supabase
+            let stockQuery = supabase
               .from('item_location_stocks')
-              .select('id, quantity, brand_new_qty')
+              .select('id, quantity, brand_new_qty, team')
               .eq('item_code', tx.item_code)
-              .eq('location', tx.to_location)
-              .maybeSingle();
+              .eq('location', tx.to_location);
+
+            if (tx.team) {
+              if (tx.team.toLowerCase() === 'aralinks') {
+                stockQuery = stockQuery.or('team.ilike.aralinks,team.is.null');
+              } else {
+                stockQuery = stockQuery.ilike('team', tx.team.toLowerCase());
+              }
+            }
+            const { data: stock } = await stockQuery.maybeSingle();
 
             if (stock) {
               await supabase
@@ -2472,11 +2489,20 @@ const ItemsRequest: React.FC<ItemsRequestProps> = ({
               
               // a. Update Inventory
               const loc = tx.to_location || tx.location || poModalRequest.location || 'IT Basement';
-              const { data: stocks } = await supabase
+              let stocksQuery = supabase
                 .from('item_location_stocks')
                 .select('*')
                 .eq('item_code', tx.item_code)
                 .eq('location', loc);
+
+              if (tx.team) {
+                if (tx.team.toLowerCase() === 'aralinks') {
+                  stocksQuery = stocksQuery.or('team.ilike.aralinks,team.is.null');
+                } else {
+                  stocksQuery = stocksQuery.ilike('team', tx.team.toLowerCase());
+                }
+              }
+              const { data: stocks } = await stocksQuery;
 
               if (stocks && stocks.length > 0) {
                 const stock = stocks[0];
